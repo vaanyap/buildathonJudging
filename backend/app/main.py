@@ -1,15 +1,19 @@
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from app.config import settings
-from app.database import Base, engine
+from app.database import Base, SessionLocal, engine
 import app.models  # noqa: F401  (register models on metadata)
+from app.seed import seed_if_empty
 from app.routers import auth as auth_router
 from app.routers import judge as judge_router
+from app.routers import organizer as organizer_router
+from app.services.domain import DomainError
 
 
 def wait_for_db() -> None:
@@ -29,6 +33,12 @@ def wait_for_db() -> None:
 async def lifespan(_app: FastAPI):
     wait_for_db()
     Base.metadata.create_all(bind=engine)
+    if settings.seed_on_start:
+        db = SessionLocal()
+        try:
+            seed_if_empty(db)
+        finally:
+            db.close()
     yield
 
 
@@ -42,6 +52,12 @@ app.add_middleware(
 )
 app.include_router(auth_router.router, prefix="/api")
 app.include_router(judge_router.router, prefix="/api")
+app.include_router(organizer_router.router, prefix="/api")
+
+
+@app.exception_handler(DomainError)
+async def domain_error_handler(_request: Request, exc: DomainError) -> JSONResponse:
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.message})
 
 
 @app.get("/api/health")

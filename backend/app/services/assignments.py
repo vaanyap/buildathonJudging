@@ -19,6 +19,8 @@ def create_assignment(db: Session, judge: User, project: Project) -> Assignment:
 
     now = utcnow()
     assignment = Assignment(judge_id=judge.id, project_id=project.id, created_at=now)
+    assignment.judge = judge
+    assignment.project = project
     db.add(assignment)
     db.flush()
 
