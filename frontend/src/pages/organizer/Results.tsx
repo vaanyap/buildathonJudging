@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, downloadCsv } from "../../api";
+import { SignInBadge } from "../../components/SignInBadge";
 import { StatusPill } from "../../components/StatusPill";
 import { formatScore, formatStamp } from "../../format";
 import type { AuditEvent, Evaluation, ResultProject, ResultsReport } from "../../types";
@@ -72,6 +73,7 @@ export default function Results() {
   const tracks = Array.from(new Set(report.projects.map((project) => project.track_name))).sort();
   const rows = report.projects.filter((project) => track === "all" || project.track_name === track);
   const discrepancies = report.projects.filter((project) => project.discrepancy);
+  const signInFlags = new Set(report.projects.filter((project) => project.attendance_flagged).map((project) => project.project_id));
 
   return (
     <div className="stack">
@@ -95,6 +97,12 @@ export default function Results() {
         <p className="banner warn">
           {discrepancies.length} project{discrepancies.length === 1 ? "" : "s"} with a scoring discrepancy:{" "}
           {discrepancies.map((project) => project.project_name).join(", ")}.
+        </p>
+      )}
+      {signInFlags.size > 0 && (
+        <p className="banner warn">
+          {signInFlags.size} project{signInFlags.size === 1 ? "" : "s"} need a sign-in check. Ranks are unchanged.{" "}
+          <Link to="/organizer/sign-in">Review sign-in</Link>
         </p>
       )}
       <div className="filters">
@@ -170,6 +178,7 @@ function ResultRows({
               Discrepancy
             </Link>
           )}
+          {project.attendance_flagged && <SignInBadge />}
         </td>
         <td>{project.track_name}</td>
         <td>{formatScore(project.overall)}</td>

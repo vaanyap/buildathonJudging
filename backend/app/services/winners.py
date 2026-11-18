@@ -225,6 +225,7 @@ def build_winners(db, per_track: int) -> dict:
                     "alignment_counts": project["alignment_counts"],
                     "discrepancy": project["discrepancy"],
                     "discrepancy_status": project["discrepancy_status"],
+                    "attendance_flagged": project.get("attendance_flagged", False),
                     "summary": summary,
                     "formal_comments": comments,
                 }

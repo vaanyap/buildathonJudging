@@ -20,6 +20,10 @@ from app.migrate import upgrade_schema
 from app.models import (
     Assignment,
     AssignmentExclusion,
+    AttendanceEvent,
+    AttendanceOverride,
+    AttendanceReview,
+    Attendee,
     AuditEvent,
     Criterion,
     DiscrepancyReview,
@@ -36,6 +40,7 @@ from app.models import (
 )
 from app.schemas import EvaluationIn
 from app.services.assignments import assign_judge_to_track
+from app.services.attendance import import_attendees
 from app.services.discrepancies import get_settings
 from app.services.evaluations import apply_autosave, mark_viewed, submit_evaluation, utcnow
 from app.services.submissions_import import import_submissions
@@ -45,6 +50,7 @@ ORGANIZER_EMAIL = "v@v"
 ORGANIZER_PASSWORD = "v"
 JUDGE_PASSWORD = "judge-demo"
 CSV_PATH = Path(__file__).resolve().parents[2] / "examples" / "submissions_export.csv"
+SIGN_IN_PATH = Path(__file__).resolve().parents[2] / "examples" / "sign_in.csv"
 
 DEFAULT_CRITERIA = [
     ("technical", "Technical execution", "Soundness of the implementation, architecture, and engineering choices.", 1),
@@ -100,6 +106,10 @@ def _reset(db: Session) -> None:
         Evaluation,
         Timer,
         DiscrepancyReview,
+        AttendanceEvent,
+        AttendanceOverride,
+        AttendanceReview,
+        Attendee,
         AssignmentExclusion,
         Assignment,
         TrackAssignment,
@@ -194,6 +204,8 @@ def _score(db: Session, assignment: Assignment, kind: str, scores: list[int] | N
     )
     apply_autosave(db, evaluation, payload, assignment.judge, assignment.track_id)
     if kind == "submitted":
+        # Submit reloads the row. The session does not autoflush, so the draft has to be written first.
+        db.flush()
         submit_evaluation(db, evaluation, assignment.judge, assignment.track_id)
 
 
@@ -296,6 +308,9 @@ def seed_database(db: Session) -> None:
     summary = import_submissions(db, CSV_PATH.read_text(encoding="utf-8"))
     if summary["skipped"]:
         raise RuntimeError(f"Seed import skipped rows: {summary['skipped']}")
+    sign_in = import_attendees(db, SIGN_IN_PATH.read_text(encoding="utf-8"))
+    if sign_in["skipped"]:
+        raise RuntimeError(f"Seed sign-in import skipped rows: {sign_in['skipped']}")
     _orders(db)
     tracks = {track.name: track for track in db.scalars(select(Track)).all()}
     for track_name, judge_names in TRACK_JUDGES.items():

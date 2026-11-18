@@ -4,6 +4,7 @@ import { useAuth } from "../../auth";
 const LINKS = [
   { to: "/organizer", label: "Overview", end: true },
   { to: "/organizer/projects", label: "Projects", end: false },
+  { to: "/organizer/sign-in", label: "Sign-in check", end: false },
   { to: "/organizer/judges", label: "Judges", end: false },
   { to: "/organizer/tracks", label: "Tracks", end: false },
   { to: "/organizer/progress", label: "Live progress", end: false },

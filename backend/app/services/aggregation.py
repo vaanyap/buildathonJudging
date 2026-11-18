@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models import Assignment, AuditEvent, DiscrepancyReview, Evaluation, Project, ProjectTrack, Score, Track
 from app.serialize import criterion_dict, evaluation_dict
+from app.services.attendance import describe_project, load_attendance_index
 from app.services.discrepancies import analyze_project, get_settings, is_active, review_for, status_of
 from app.services.evaluations import active_criteria, utcnow
 from app.services.timers import get_timer_defaults, refresh_all_timers, sync_timer
@@ -70,7 +71,10 @@ def build_results(db: Session, track_id: int | None = None) -> dict:
         for row in db.scalars(select(DiscrepancyReview).options(selectinload(DiscrepancyReview.updated_by))).all()
     }
     rows: list[dict] = []
-    for project in load_projects(db):
+    loaded = load_projects(db)
+    sign_in_index = load_attendance_index(db)
+    sign_in = {project.id: describe_project(project, sign_in_index) for project in loaded}
+    for project in loaded:
         for member in sorted(project.memberships, key=lambda item: item.track.name.lower()):
             if track_id is not None and member.track_id != track_id:
                 continue
@@ -126,6 +130,7 @@ def build_results(db: Session, track_id: int | None = None) -> dict:
             analysis = analyze_project(project, criteria, settings, member.track_id)
             review = reviews.get((project.id, member.track_id))
             active = is_active(analysis, review)
+            sign_in_row = sign_in[project.id]
             rows.append(
                 {
                     "project_id": project.id,
@@ -145,6 +150,13 @@ def build_results(db: Session, track_id: int | None = None) -> dict:
                     "discrepancy": active,
                     "discrepancy_status": status_of(review) if analysis is not None else None,
                     "discrepancy_reasons": analysis["reasons"] if analysis is not None else [],
+                    "attendance_flagged": sign_in_row["flagged"],
+                    "attendance_review": sign_in_row["review"]["status"],
+                    "attendance_note": sign_in_row["review"]["note"],
+                    "attendance_members": [
+                        {"name": person["name"], "status": person["status"], "label": person["label"]}
+                        for person in sign_in_row["members"]
+                    ],
                     "judges": judges,
                     "evaluations": evaluations,
                 }

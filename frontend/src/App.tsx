@@ -9,6 +9,7 @@ import OrganizerLayout from "./pages/organizer/Layout";
 import Monitoring from "./pages/organizer/Monitoring";
 import Overview from "./pages/organizer/Overview";
 import Projects from "./pages/organizer/Projects";
+import SignIn from "./pages/organizer/SignIn";
 import Results from "./pages/organizer/Results";
 import Discrepancies from "./pages/organizer/Discrepancies";
 import Tracks from "./pages/organizer/Tracks";
@@ -62,6 +63,7 @@ export default function App() {
       >
         <Route index element={<Overview />} />
         <Route path="projects" element={<Projects />} />
+        <Route path="sign-in" element={<SignIn />} />
         <Route path="judges" element={<Judges />} />
         <Route path="tracks" element={<Tracks />} />
         <Route path="progress" element={<Monitoring />} />

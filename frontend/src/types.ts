@@ -137,7 +137,65 @@ export type AssignmentSummary = {
   status: EvalStatus;
 };
 
-export type AdminProject = ProjectFields & { assignments: AssignmentSummary[] };
+export type AdminProject = ProjectFields & {
+  assignments: AssignmentSummary[];
+  attendance_flagged: boolean;
+  attendance_review: string;
+};
+
+export type SignInStatus = "attended" | "possible" | "not_found" | "confirmed";
+export type SignInReviewStatus = "open" | "reviewed_ok" | "disqualified";
+
+export type SignInPerson = {
+  id: number;
+  first_name: string;
+  last_name: string;
+  email: string;
+  name: string;
+};
+
+export type SignInMember = {
+  name: string;
+  member_key: string;
+  status: SignInStatus;
+  label: string;
+  present: boolean;
+  resolution: string;
+  detail: string;
+  matched_attendee: SignInPerson | null;
+  candidates: SignInPerson[];
+  override: {
+    decision: "attended" | "absent";
+    attendee_id: number | null;
+    updated_by: string | null;
+    updated_at: string | null;
+  } | null;
+};
+
+export type SignInProject = {
+  project_id: number;
+  project_name: string;
+  tracks: { id: number; name: string }[];
+  flagged: boolean;
+  fully_absent: boolean;
+  missing_members: string[];
+  members: SignInMember[];
+  review: {
+    status: SignInReviewStatus;
+    label: string;
+    note: string;
+    updated_by: string | null;
+    updated_at: string | null;
+  };
+  audits: AuditEvent[];
+};
+
+export type SignInReport = {
+  attendee_count: number;
+  flagged_count: number;
+  attendees: SignInPerson[];
+  projects: SignInProject[];
+};
 
 export type JudgeAccount = {
   id: number;
@@ -232,6 +290,8 @@ export type ResultProject = {
   discrepancy: boolean;
   discrepancy_status: string | null;
   discrepancy_reasons: string[];
+  attendance_flagged: boolean;
+  attendance_review: string;
   judges: ResultJudge[];
   evaluations: Evaluation[];
 };

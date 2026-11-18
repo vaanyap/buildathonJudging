@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "../../api";
+import { SignInBadge } from "../../components/SignInBadge";
 import { StatusPill } from "../../components/StatusPill";
 import type { AdminProject, JudgeAccount, Track } from "../../types";
 
@@ -337,6 +338,7 @@ export default function Projects() {
                   <button className="linkish" type="button" onClick={() => setSelected(project.id)}>
                     {project.name}
                   </button>
+                  {project.attendance_flagged && <SignInBadge />}
                 </td>
                 <td>{project.tracks.map((track) => track.name).join(", ") || "—"}</td>
                 <td>{project.team_members.join(", ")}</td>

@@ -68,6 +68,8 @@ The seed imports `examples/submissions_export.csv`, the MLH/Devpost submissions 
 
 `examples/submissions_export.csv` is the organizer import file. Re-importing it updates projects by Page URL.
 
+The seed also loads `examples/sign_in.csv`, a day-of sign-in list. LIFTR and Hodlings are missing entirely, Stephen MO on JARVIS is only a possible match, and Romir Basu and Emily Yang are not on the list.
+
 ## Tests
 
 ```bash
@@ -88,6 +90,7 @@ Pytest uses the `judging_test` database and will not touch the demo data. The su
 - Results average submitted quality scores only and rank inside each track. A discrepancy is an overall spread of 1.5 or more, or a criterion where one submitted score is 4–5 and another is 1–2. Organizers mark it open, discussing, or resolved. Results and winners keep the badge until it is resolved.
 - Winner summaries are built from submitted formal feedback. An optional `WINNER_SUMMARY_API_URL` can rewrite the narrative; if it is unset or the call fails, the rule-based summary is used.
 - Cross-track flags are a review list. They do not move a project or change its rank.
+- The Sign-in check page compares each submitted teammate with the day-of sign-in list (first name, last name, email). A missing or possible match flags the project for review and does not change scores, rank, or eligibility. Manual confirmations survive a new upload. Results CSV includes the sign-in status.
 - Organizer progress polls every few seconds.
 
 ## Known limits
