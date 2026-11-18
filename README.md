@@ -55,13 +55,8 @@ cd backend && python -m app.seed --reset
 
 | Role | Name | Email | Password |
 | --- | --- | --- | --- |
-| Organizer | Avery Shah | organizer@tech.nyu.edu | organizer-demo |
-| Judge | Alex Rivera | alex.rivera@nyu.edu | judge-demo |
-| Judge | Jordan Lee | jordan.lee@nyu.edu | judge-demo |
-| Judge | Maya Chen | maya.chen@nyu.edu | judge-demo |
-| Judge | Priya Patel | priya.patel@nyu.edu | judge-demo |
-| Judge | Riley Nguyen | riley.nguyen@nyu.edu | judge-demo |
-| Judge | Sam Okonkwo | sam.okonkwo@nyu.edu | judge-demo |
+| Organizer | Avery Shah | vp2852@nyu.edu | organizer-demo |
+| Judge | Alex Rivera | vpuri22@uwo.ca | judge-demo |
 
 The login screen can sign in as the organizer or as Maya directly. Every judge uses `judge-demo`.
 
