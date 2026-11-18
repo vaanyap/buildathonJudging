@@ -7,7 +7,7 @@ seconds, and whether that phase's clock is running. Scoring does not read this
 state.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Literal
 
 from sqlalchemy import select
@@ -105,15 +105,24 @@ def _reconcile_active(timer: Timer) -> None:
         timer.active_phase = "presentation"
 
 
+def _mark_phase_time_up(timer: Timer, phase: PhaseName, allowed: int, now: datetime) -> None:
+    """Record the moment the clock actually hit zero, even if we notice later."""
+    running_since = _get(timer, phase, "running_since")
+    bank = _get(timer, phase, "accumulated_seconds")
+    segment = max(0, allowed - bank)
+    ended = running_since + timedelta(seconds=segment) if running_since is not None else now
+    _set(timer, phase, "accumulated_seconds", allowed)
+    _set(timer, phase, "running_since", None)
+    _set(timer, phase, "status", "time_up")
+    if _get(timer, phase, "ended_at") is None:
+        _set(timer, phase, "ended_at", ended)
+    timer.updated_at = now
+
+
 def _sync_phase(timer: Timer, project: Project | None, defaults: TimerDefaults, phase: PhaseName, now: datetime) -> None:
     allowed = allowed_seconds(project, defaults, phase)
     if _get(timer, phase, "status") == "running" and _elapsed(timer, phase, now) >= allowed:
-        _set(timer, phase, "accumulated_seconds", allowed)
-        _set(timer, phase, "running_since", None)
-        _set(timer, phase, "status", "time_up")
-        if _get(timer, phase, "ended_at") is None:
-            _set(timer, phase, "ended_at", now)
-        timer.updated_at = now
+        _mark_phase_time_up(timer, phase, allowed, now)
 
 
 def _phase_view(timer: Timer, project: Project | None, defaults: TimerDefaults, phase: PhaseName, now: datetime) -> dict:
@@ -174,15 +183,12 @@ def _pause_phase(
         return
     allowed = allowed_seconds(project, defaults, phase)
     elapsed = _elapsed(timer, phase, now)
-    _set(timer, phase, "running_since", None)
     if elapsed >= allowed:
-        _set(timer, phase, "accumulated_seconds", allowed)
-        _set(timer, phase, "status", "time_up")
-        if _get(timer, phase, "ended_at") is None:
-            _set(timer, phase, "ended_at", now)
-    else:
-        _set(timer, phase, "accumulated_seconds", elapsed)
-        _set(timer, phase, "status", "paused")
+        _mark_phase_time_up(timer, phase, allowed, now)
+        return
+    _set(timer, phase, "accumulated_seconds", elapsed)
+    _set(timer, phase, "running_since", None)
+    _set(timer, phase, "status", "paused")
     timer.updated_at = now
 
 
@@ -224,18 +230,10 @@ def start_timer(timer: Timer, project: Project | None, defaults: TimerDefaults, 
 
 def pause_timer(timer: Timer, project: Project | None, defaults: TimerDefaults, phase: PhaseName) -> dict:
     now = utcnow()
-    if timer.status != "running":
-        return sync_timer(timer, slot, now)
-    allowed = allowed_seconds(slot)
-    elapsed = _elapsed(timer, now)
-    if elapsed >= allowed:
-        _mark_time_up(timer, allowed, now)
-    else:
-        timer.accumulated_seconds = elapsed
-        timer.running_since = None
-        timer.status = "paused"
-        timer.updated_at = now
-    return sync_timer(timer, slot, now)
+    sync_timer(timer, project, defaults, now)
+    _pause_phase(timer, project, defaults, phase, now)
+    timer.active_phase = phase
+    return sync_timer(timer, project, defaults, now)
 
 
 def reset_timer(timer: Timer, project: Project | None, defaults: TimerDefaults, phase: PhaseName) -> dict:

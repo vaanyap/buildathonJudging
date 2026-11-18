@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app.models import Evaluation, Timer, User
+from app.models import Evaluation, Timer, TimerDefaults, User
 from app.schemas import EvaluationIn
 from app.services.domain import DomainError
 from app.services.evaluations import apply_autosave
@@ -18,12 +18,12 @@ def test_reopened_submission_cannot_be_deleted(client, db):
     organizer, maya, project = _assign(client, db)
     project_id = project["id"]
     saved = client.put(
-        f"/api/judge/projects/{project_id}/evaluation",
+        f"/api/judge/projects/{project_id}/tracks/{project['track_id']}/evaluation",
         headers=maya,
         json=evaluation_body(),
     )
     assert saved.status_code == 200, saved.text
-    submitted = client.post(f"/api/judge/projects/{project_id}/evaluation/submit", headers=maya)
+    submitted = client.post(f"/api/judge/projects/{project_id}/tracks/{project['track_id']}/evaluation/submit", headers=maya)
     assert submitted.status_code == 200, submitted.text
     reopened = client.post(f"/api/organizer/evaluations/{submitted.json()['id']}/reopen", headers=organizer)
     assert reopened.status_code == 200, reopened.text
@@ -41,12 +41,12 @@ def test_reopened_submission_cannot_be_deleted(client, db):
 def test_csv_export_neutralizes_formulas(client, db):
     organizer, maya, project = _assign(client, db)
     saved = client.put(
-        f"/api/judge/projects/{project['id']}/evaluation",
+        f"/api/judge/projects/{project['id']}/tracks/{project['track_id']}/evaluation",
         headers=maya,
         json=evaluation_body(formal_feedback="=1+1", alignment_explanation="+cmd|'/c calc'!A0"),
     )
     assert saved.status_code == 200, saved.text
-    submitted = client.post(f"/api/judge/projects/{project['id']}/evaluation/submit", headers=maya)
+    submitted = client.post(f"/api/judge/projects/{project['id']}/tracks/{project['track_id']}/evaluation/submit", headers=maya)
     assert submitted.status_code == 200, submitted.text
     exported = client.get("/api/organizer/export/feedback.csv", headers=organizer)
     assert exported.status_code == 200
@@ -60,7 +60,7 @@ def test_csv_export_neutralizes_formulas(client, db):
 def test_scale_change_rejects_existing_scores(client, db):
     organizer, maya, project = _assign(client, db)
     saved = client.put(
-        f"/api/judge/projects/{project['id']}/evaluation",
+        f"/api/judge/projects/{project['id']}/tracks/{project['track_id']}/evaluation",
         headers=maya,
         json=evaluation_body(scores=full_scores(5)),
     )
@@ -82,11 +82,13 @@ def test_scale_change_rejects_existing_scores(client, db):
     assert next(item for item in again if item["key"] == "technical")["max_score"] == 5
 
 
-def test_import_reports_extra_commas_without_aborting(client, db):
+def test_import_reports_a_bad_row_without_aborting(client, db):
     make_user(db, "organizer", "org@example.com", "Organizer")
     organizer = login(client, "org@example.com")
-    client.post("/api/organizer/tracks", json={"name": "Education", "description": ""}, headers=organizer)
-    payload = "name,track,description\nKept,Education,A clean row\nBroken,Education,hello,extra\n"
+    header = "Project,Table,Prize Categories,Winner,Team,Source,Demo,Video,Short Description,Submitted At,Page"
+    kept = "Kept,,Education,,,https://github.com/example/kept,,,,,https://example.com/kept"
+    broken = "Broken,,Education,,,notaurl,,,,,https://example.com/broken"
+    payload = "\n".join((header, kept, broken)) + "\n"
     response = client.post(
         "/api/organizer/projects/import",
         headers=organizer,
@@ -95,7 +97,7 @@ def test_import_reports_extra_commas_without_aborting(client, db):
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["created"] == 1
-    assert body["errors"][0]["row"] == 3
+    assert body["skipped"][0]["row"] == 3
     names = [item["name"] for item in client.get("/api/organizer/projects", headers=organizer).json()]
     assert names == ["Kept"]
 
@@ -103,7 +105,7 @@ def test_import_reports_extra_commas_without_aborting(client, db):
 def test_stale_autosave_cannot_overwrite_a_submission(client, db):
     organizer, maya, project = _assign(client, db)
     ready = client.put(
-        f"/api/judge/projects/{project['id']}/evaluation",
+        f"/api/judge/projects/{project['id']}/tracks/{project['track_id']}/evaluation",
         headers=maya,
         json=evaluation_body(scores=full_scores(4)),
     )
@@ -113,7 +115,7 @@ def test_stale_autosave_cannot_overwrite_a_submission(client, db):
         evaluation = other.scalar(select(Evaluation).where(Evaluation.project_id == project["id"]))
         assert evaluation is not None
         judge = other.get(User, evaluation.judge_id)
-        submitted = client.post(f"/api/judge/projects/{project['id']}/evaluation/submit", headers=maya)
+        submitted = client.post(f"/api/judge/projects/{project['id']}/tracks/{project['track_id']}/evaluation/submit", headers=maya)
         assert submitted.status_code == 200, submitted.text
         try:
             apply_autosave(
@@ -129,38 +131,47 @@ def test_stale_autosave_cannot_overwrite_a_submission(client, db):
         other.rollback()
     finally:
         other.close()
-    current = client.get(f"/api/judge/projects/{project['id']}/evaluation", headers=maya).json()
+    current = client.get(f"/api/judge/projects/{project['id']}/tracks/{project['track_id']}/evaluation", headers=maya).json()
     assert current["status"] == "submitted"
     assert all(score["value"] == 4 for score in current["scores"])
 
 
-def test_timer_end_uses_the_moment_time_expired(db):
-    _ = db
+def test_timer_end_uses_the_moment_time_expired():
     now = datetime.now(timezone.utc)
     started = now - timedelta(minutes=20)
+    defaults = TimerDefaults(presentation_minutes=5, qa_minutes=2, updated_at=now)
     timer = Timer(
-        assignment_id=1,
-        accumulated_seconds=0,
-        status="running",
-        running_since=started,
-        actual_started_at=started,
+        judge_id=1,
+        project_id=1,
+        active_phase="presentation",
+        presentation_status="running",
+        presentation_accumulated_seconds=0,
+        presentation_running_since=started,
+        presentation_started_at=started,
+        presentation_ended_at=None,
+        qa_status="idle",
+        qa_accumulated_seconds=0,
+        qa_running_since=None,
+        qa_started_at=None,
+        qa_ended_at=None,
         updated_at=started,
     )
-    sync_timer(timer, None, now)
-    assert timer.status == "time_up"
-    assert timer.actual_ended_at == started + timedelta(seconds=300)
+    sync_timer(timer, None, defaults, now)
+    assert timer.presentation_status == "time_up"
+    assert timer.presentation_ended_at == started + timedelta(seconds=300)
+    assert timer.qa_status == "idle"
 
 
 def test_revision_conflict_is_rejected(client, db):
     _organizer, maya, project = _assign(client, db)
     first = client.put(
-        f"/api/judge/projects/{project['id']}/evaluation",
+        f"/api/judge/projects/{project['id']}/tracks/{project['track_id']}/evaluation",
         headers=maya,
         json=evaluation_body(scores={"technical": 2, "innovation": None, "impact": None, "presentation": None}, alignment=None, alignment_explanation=""),
     )
     assert first.status_code == 200, first.text
     stale = client.put(
-        f"/api/judge/projects/{project['id']}/evaluation",
+        f"/api/judge/projects/{project['id']}/tracks/{project['track_id']}/evaluation",
         headers=maya,
         json=evaluation_body(
             scores=full_scores(5),
@@ -168,5 +179,5 @@ def test_revision_conflict_is_rejected(client, db):
         ),
     )
     assert stale.status_code == 409
-    current = client.get(f"/api/judge/projects/{project['id']}/evaluation", headers=maya).json()
+    current = client.get(f"/api/judge/projects/{project['id']}/tracks/{project['track_id']}/evaluation", headers=maya).json()
     assert next(score["value"] for score in current["scores"] if score["key"] == "technical") == 2
