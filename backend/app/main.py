@@ -8,6 +8,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import Base, engine
 import app.models  # noqa: F401  (register models on metadata)
+from app.routers import auth as auth_router
 
 
 def wait_for_db() -> None:
@@ -38,6 +39,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.include_router(auth_router.router, prefix="/api")
 
 
 @app.get("/api/health")
