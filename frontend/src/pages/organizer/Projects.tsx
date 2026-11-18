@@ -7,7 +7,7 @@ type Draft = {
   id?: number;
   name: string;
   description: string;
-  track_id: string;
+  track_ids: string[];
   team_members: string;
   github_url: string;
   demo_url: string;
@@ -17,7 +17,7 @@ type Draft = {
 const EMPTY: Draft = {
   name: "",
   description: "",
-  track_id: "",
+  track_ids: [],
   team_members: "",
   github_url: "",
   demo_url: "",
@@ -37,6 +37,7 @@ export default function Projects() {
   const [trackName, setTrackName] = useState("");
   const [selected, setSelected] = useState<number | null>(null);
   const [assignJudge, setAssignJudge] = useState("");
+  const [assignTrack, setAssignTrack] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -63,7 +64,7 @@ export default function Projects() {
       id: project.id,
       name: project.name,
       description: project.description,
-      track_id: String(project.track_id),
+      track_ids: project.tracks.map((track) => String(track.id)),
       team_members: project.team_members.join("\n"),
       github_url: project.github_url,
       demo_url: project.demo_url,
@@ -80,7 +81,7 @@ export default function Projects() {
     const body = {
       name: draft.name,
       description: draft.description,
-      track_id: Number(draft.track_id),
+      track_ids: draft.track_ids.map(Number),
       team_members: draft.team_members.split("\n").map((line) => line.trim()).filter(Boolean),
       github_url: draft.github_url,
       demo_url: draft.demo_url,
@@ -109,7 +110,9 @@ export default function Projects() {
       });
       setTrackName("");
       setTracks((currentTracks) => [...currentTracks, track].sort((a, b) => a.name.localeCompare(b.name)));
-      setDraft((currentDraft) => (currentDraft ? { ...currentDraft, track_id: String(track.id) } : currentDraft));
+      setDraft((currentDraft) =>
+        currentDraft ? { ...currentDraft, track_ids: [...currentDraft.track_ids, String(track.id)] } : currentDraft,
+      );
       setNotice(`Added track ${track.name}.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't add the track");
@@ -140,7 +143,7 @@ export default function Projects() {
     try {
       await api("/api/organizer/assignments", {
         method: "POST",
-        body: JSON.stringify({ judge_id: Number(assignJudge), project_id: current.id, force }),
+        body: JSON.stringify({ judge_id: Number(assignJudge), project_id: current.id, track_id: Number(assignTrack), force }),
       });
       setAssignJudge("");
       setNotice("Judge assigned.");
@@ -191,13 +194,20 @@ export default function Projects() {
     const body = new FormData();
     body.append("file", file);
     try {
-      const result = await api<{ created: number; errors: { row: number; message: string }[] }>("/api/organizer/projects/import", {
+      const result = await api<{
+        created: number;
+        updated: number;
+        tracks: string[];
+        skipped: { row: number; message: string }[];
+      }>("/api/organizer/projects/import", {
         method: "POST",
         body,
       });
-      setNotice(`Imported ${result.created} project${result.created === 1 ? "" : "s"}.`);
-      if (result.errors.length) {
-        setError(result.errors.map((item) => `Row ${item.row}: ${item.message}`).join(" "));
+      setNotice(
+        `Created ${result.created}, updated ${result.updated}. Tracks: ${result.tracks.join(", ") || "none"}.`,
+      );
+      if (result.skipped.length) {
+        setError(result.skipped.map((item) => `Row ${item.row}: ${item.message}`).join(" "));
       }
       await load();
     } catch (err) {
@@ -230,7 +240,7 @@ export default function Projects() {
               }}
             />
           </label>
-          <button className="btn primary" type="button" onClick={() => setDraft({ ...EMPTY, track_id: tracks[0] ? String(tracks[0].id) : "" })}>
+          <button className="btn primary" type="button" onClick={() => setDraft({ ...EMPTY })}>
             Add project
           </button>
         </div>
@@ -247,15 +257,27 @@ export default function Projects() {
             <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} required />
           </label>
           <label>
-            Track
-            <select value={draft.track_id} onChange={(event) => setDraft({ ...draft, track_id: event.target.value })} required>
-              <option value="">Choose</option>
+            Prize categories
+            <span className="hint">Imported from the submissions file. Change these only to correct a category.</span>
+            <div className="stack tight">
               {tracks.map((track) => (
-                <option key={track.id} value={track.id}>
+                <label key={track.id} className="check">
+                  <input
+                    type="checkbox"
+                    checked={draft.track_ids.includes(String(track.id))}
+                    onChange={(event) =>
+                      setDraft({
+                        ...draft,
+                        track_ids: event.target.checked
+                          ? [...draft.track_ids, String(track.id)]
+                          : draft.track_ids.filter((id) => id !== String(track.id)),
+                      })
+                    }
+                  />
                   {track.name}
-                </option>
+                </label>
               ))}
-            </select>
+            </div>
           </label>
           <label className="span-2">
             Description
@@ -316,7 +338,7 @@ export default function Projects() {
                     {project.name}
                   </button>
                 </td>
-                <td>{project.track_name}</td>
+                <td>{project.tracks.map((track) => track.name).join(", ") || "—"}</td>
                 <td>{project.team_members.join(", ")}</td>
                 <td>{project.assignments.length}</td>
                 <td className="actions">
@@ -341,7 +363,7 @@ export default function Projects() {
             {current.assignments.map((assignment) => (
               <li key={assignment.assignment_id} className="assign-row">
                 <span>
-                  {assignment.judge_name} <StatusPill status={assignment.status} />
+                  {assignment.judge_name} · {assignment.track_name} <StatusPill status={assignment.status} />
                 </span>
                 <select
                   aria-label={`Reassign ${assignment.judge_name}`}
@@ -369,6 +391,14 @@ export default function Projects() {
             {current.assignments.length === 0 && <li className="muted">No judges yet.</li>}
           </ul>
           <div className="inline-form">
+            <select aria-label="Track for this assignment" value={assignTrack} onChange={(event) => setAssignTrack(event.target.value)}>
+              <option value="">Track</option>
+              {current.tracks.map((track) => (
+                <option key={track.id} value={track.id}>
+                  {track.name}
+                </option>
+              ))}
+            </select>
             <select aria-label="Judge to assign" value={assignJudge} onChange={(event) => setAssignJudge(event.target.value)}>
               <option value="">Assign a judge</option>
               {available.map((judge) => (
@@ -377,7 +407,7 @@ export default function Projects() {
                 </option>
               ))}
             </select>
-            <button className="btn" type="button" disabled={!assignJudge} onClick={() => void assign()}>
+            <button className="btn" type="button" disabled={!assignJudge || !assignTrack} onClick={() => void assign()}>
               Assign
             </button>
           </div>

@@ -9,6 +9,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import Base, SessionLocal, engine
 import app.models  # noqa: F401  (register models on metadata)
+from app.migrate import upgrade_schema
 from app.seed import seed_if_empty
 from app.routers import auth as auth_router
 from app.routers import judge as judge_router
@@ -35,8 +36,7 @@ async def lifespan(_app: FastAPI):
     require_jwt_secret()
     wait_for_db()
     Base.metadata.create_all(bind=engine)
-    with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1"))
+    upgrade_schema(engine)
     if settings.seed_on_start:
         db = SessionLocal()
         try:

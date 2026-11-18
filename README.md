@@ -59,19 +59,14 @@ cd backend && python -m app.seed --reset
 
 | Role | Name | Email | Password |
 | --- | --- | --- | --- |
-| Organizer | Avery Shah | organizer@tech.nyu.edu | organizer-demo |
-| Judge | Alex Rivera | alex.rivera@nyu.edu | judge-demo |
-| Judge | Jordan Lee | jordan.lee@nyu.edu | judge-demo |
-| Judge | Maya Chen | maya.chen@nyu.edu | judge-demo |
-| Judge | Priya Patel | priya.patel@nyu.edu | judge-demo |
-| Judge | Riley Nguyen | riley.nguyen@nyu.edu | judge-demo |
-| Judge | Sam Okonkwo | sam.okonkwo@nyu.edu | judge-demo |
+| Organizer | Avery Shah | vp2852@nyu.edu | organizer-demo |
+| Judge | Alex Rivera | vpuri22@uwo.ca | judge-demo |
 
 The login screen can sign in as the organizer or as Maya directly. Every judge uses `judge-demo`.
 
-The seed is a judging day anchored to the current clock: 6 tracks, 6 judges, 18 projects, schedules across three rooms, and evaluations in every status. GreenRoute has a scoring discrepancy. QuizForge is flagged for Artificial Intelligence by two judges. ShelterLink is a missed start, and OfficeHours+ is running long. Times are America/New_York.
+The seed imports `examples/submissions_export.csv`, the MLH/Devpost submissions export. Prize categories become tracks, and a project can belong to more than one. Six demo judges are assigned across those tracks. JARVIS in Best Open-Source AI Project is a scoring discrepancy. CityLine is flagged for the SpaceX Super Intelligence Track. JARVIS is in Q&A for Alex, and Droplet's presentation timer is running for Jordan.
 
-`examples/projects-import.csv` is a sample file for the organizer import.
+`examples/submissions_export.csv` is the organizer import file. Re-importing it updates projects by Page URL.
 
 ## Tests
 
@@ -85,13 +80,13 @@ Pytest uses the `judging_test` database and will not touch the demo data. The su
 
 ## How the pieces fit
 
-- Judges only receive projects they are assigned. Another judge's project returns 404.
-- Private notes stay on the judge's evaluation. Organizer pages and both CSV exports omit them.
-- Opening a project marks it viewed. Partial input becomes a draft. A complete scorecard is ready to submit. Submit locks it.
-- Organizers can reopen a submitted scorecard. Later score changes are written to an audit log.
-- One evaluation row exists per judge and project (`uq_evaluation_judge_project`).
-- Presentation timers live on the server: start, pause, reset, a one-minute warning, time-up, and actual start and end. Organizer extensions add minutes to the scheduled duration. The timer does not submit or block scores.
-- Results average submitted quality scores only, rank inside each track, and flag a discrepancy when overall scores differ by 1.5 or more, or any criterion differs by 2 or more.
+- Judges are assigned to prize-category tracks and score every project in those tracks. A project in several tracks is a separate scorecard in each one (`uq_evaluation_judge_project_track`). Another judge's project returns 404.
+- Private notes stay off organizer results, winners, and exports. On an active discrepancy, the judges whose scores caused the flag have their notes shown, labeled as visible because of the discrepancy, and each view is written to that evaluation's audit trail.
+- Opening a scorecard marks it viewed. Partial input becomes a draft. A complete scorecard is ready to submit. Submit locks it.
+- Organizers can reopen a submitted scorecard from results or the discrepancy review. Later score changes are written to an audit log.
+- One presentation timer is shared by a judge across every track scorecard for that project. Presentation defaults to 3 minutes and Q&A to 2. The judge starts Q&A manually. Each phase has start, pause, reset, a warning, time-up, and its own actual start and end. Organizer extensions add minutes to one phase. The timer does not submit or block scores.
+- Results average submitted quality scores only and rank inside each track. A discrepancy is an overall spread of 1.5 or more, or a criterion where one submitted score is 4–5 and another is 1–2. Organizers mark it open, discussing, or resolved. Results and winners keep the badge until it is resolved.
+- Winner summaries are built from submitted formal feedback. An optional `WINNER_SUMMARY_API_URL` can rewrite the narrative; if it is unset or the call fails, the rule-based summary is used.
 - Cross-track flags are a review list. They do not move a project or change its rank.
 - Organizer progress polls every few seconds.
 
@@ -100,5 +95,15 @@ Pytest uses the `judging_test` database and will not touch the demo data. The su
 - Live updates use polling, not websockets.
 - The UI creates judge accounts. Additional organizer accounts are not created from the dashboard.
 - There is no emailed password reset. Organizers set judge passwords when they create accounts.
-- The one-minute and time-up notices are on-screen banners.
+- The one-minute, 30-second, and time-up notices are on-screen banners.
+
+## Migration notes
+
+Startup runs `upgrade_schema` after `create_all`.
+
+- An old single `projects.track_id` becomes a row in `project_tracks`. Assignments and evaluations gain `track_id` from that membership. The unique keys are now `(judge_id, project_id, track_id)`.
+- An old `schedule_slots` row is copied onto the project: a 5 minute slot becomes 3 minutes of presentation and 2 of Q&A, and the old extension moves to the presentation phase. The slot table is then dropped. There is no scheduled start time.
+- An old timer row keyed by `assignment_id` is copied onto `(judge_id, project_id)` as the presentation phase. Q&A starts idle. One clock is shared by every track scorecard that judge has for the project.
+- Existing databases keep per-project assignments (`source = project`), so judges do not lose access. New access comes from assigning a judge to a track.
+- Re-seed with `python -m app.seed --reset` to load the submissions export. That replaces the old demo projects.
 - A submitted evaluation cannot be reassigned or deleted, so finished scores stay attached to the judge who wrote them.

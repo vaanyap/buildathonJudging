@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api";
 import { StatusPill } from "../../components/StatusPill";
-import { percent } from "../../format";
+import { percent, timerStatusLabel } from "../../format";
 import type { Progress } from "../../types";
 
 export default function Monitoring() {
@@ -74,6 +74,9 @@ export default function Monitoring() {
                     {project.judges.map((judge) => (
                       <span key={judge.judge_id} className="inline-status">
                         {judge.judge_name} <StatusPill status={judge.status} />
+                        <span className="muted">
+                          P {timerStatusLabel(judge.presentation_status)} · Q&A {timerStatusLabel(judge.qa_status)}
+                        </span>
                       </span>
                     ))}
                   </div>

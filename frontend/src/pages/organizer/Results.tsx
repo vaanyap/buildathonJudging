@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import { api, downloadCsv } from "../../api";
 import { StatusPill } from "../../components/StatusPill";
 import { formatScore, formatStamp } from "../../format";
@@ -21,7 +22,7 @@ function describeAudit(audit: AuditEvent): string {
 export default function Results() {
   const [report, setReport] = useState<ResultsReport | null>(null);
   const [track, setTrack] = useState("all");
-  const [openId, setOpenId] = useState<number | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
 
@@ -125,11 +126,13 @@ export default function Results() {
           <tbody>
             {rows.map((project) => (
               <ResultRows
-                key={project.project_id}
+                key={`${project.project_id}-${project.track_id}`}
                 project={project}
                 criteria={report.criteria}
-                open={openId === project.project_id}
-                onToggle={() => setOpenId(openId === project.project_id ? null : project.project_id)}
+                open={openId === `${project.project_id}-${project.track_id}`}
+                onToggle={() =>
+                  setOpenId(openId === `${project.project_id}-${project.track_id}` ? null : `${project.project_id}-${project.track_id}`)
+                }
                 onReopen={(evaluation) => void reopen(evaluation)}
               />
             ))}
@@ -162,7 +165,11 @@ function ResultRows({
           <button className="linkish" type="button" onClick={onToggle}>
             {project.project_name}
           </button>
-          {project.discrepancy && <span className="pill delay-overrun">Discrepancy</span>}
+          {project.discrepancy && (
+            <Link className="pill delay-overrun" to={`/organizer/discrepancies`}>
+              Discrepancy
+            </Link>
+          )}
         </td>
         <td>{project.track_name}</td>
         <td>{formatScore(project.overall)}</td>
