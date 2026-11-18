@@ -62,7 +62,17 @@ a { color: var(--violet-ink); }
 .btn.small, .chip { padding: 7px 12px; font-size: 0.92rem; }
 .btn.danger { color: var(--red); border-color: #f1c3cf; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.file-input { display: none; }
+.file-label { position: relative; }
+.file-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+.file-label:focus-within { outline: 2px solid var(--violet); outline-offset: 2px; }
 
 .banner { border-radius: 14px; padding: 12px 14px; }
 .banner.bad { background: var(--red-soft); color: var(--red); }

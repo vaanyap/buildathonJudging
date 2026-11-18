@@ -26,7 +26,9 @@ export default function CrossTrack() {
     };
   }, []);
 
-  if (!report) return <p className="page-loading">Loading cross-track flags…</p>;
+  if (!report) {
+    return error ? <p className="banner bad">{error}</p> : <p className="page-loading">Loading cross-track flags…</p>;
+  }
 
   return (
     <div className="stack">

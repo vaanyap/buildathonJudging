@@ -224,10 +224,18 @@ def start_timer(timer: Timer, project: Project | None, defaults: TimerDefaults, 
 
 def pause_timer(timer: Timer, project: Project | None, defaults: TimerDefaults, phase: PhaseName) -> dict:
     now = utcnow()
-    sync_timer(timer, project, defaults, now)
-    _pause_phase(timer, project, defaults, phase, now)
-    timer.active_phase = phase
-    return sync_timer(timer, project, defaults, now)
+    if timer.status != "running":
+        return sync_timer(timer, slot, now)
+    allowed = allowed_seconds(slot)
+    elapsed = _elapsed(timer, now)
+    if elapsed >= allowed:
+        _mark_time_up(timer, allowed, now)
+    else:
+        timer.accumulated_seconds = elapsed
+        timer.running_since = None
+        timer.status = "paused"
+        timer.updated_at = now
+    return sync_timer(timer, slot, now)
 
 
 def reset_timer(timer: Timer, project: Project | None, defaults: TimerDefaults, phase: PhaseName) -> dict:

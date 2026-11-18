@@ -297,6 +297,16 @@ def update_criterion(
         raise HTTPException(status_code=404, detail="Criterion not found")
     if body.min_score > body.max_score:
         raise HTTPException(status_code=400, detail="Minimum score cannot exceed maximum score")
+    from app.models import Score
+
+    saved_values = db.scalars(
+        select(Score.value).where(Score.criterion_id == criterion.id, Score.value.is_not(None))
+    ).all()
+    if any(value < body.min_score or value > body.max_score for value in saved_values):
+        raise HTTPException(
+            status_code=409,
+            detail="Saved scores fall outside that range. Edit those scorecards before changing the scale.",
+        )
     criterion.name = body.name.strip()
     criterion.description = body.description.strip()
     criterion.min_score = body.min_score
@@ -354,8 +364,9 @@ def remove_project(
     project = _require_project(db, project_id)
     try:
         for assignment in list(project.assignments):
-            status = assignment.evaluation.status if assignment.evaluation is not None else "not_started"
-            if status == "submitted":
+            evaluation = assignment.evaluation
+            status = evaluation.status if evaluation is not None else "not_started"
+            if evaluation is not None and (evaluation.submission_count > 0 or status == "submitted"):
                 raise DomainError("This project has a submitted evaluation and can't be deleted.", 409)
             if status in {"draft_saved", "ready_to_submit"} and not force:
                 raise DomainError("This project has saved drafts. Confirm to delete it.", 409)
@@ -860,6 +871,17 @@ def reopen(
     return payload
 
 
+def csv_cell(value: object) -> str:
+    text = "" if value is None else str(value)
+    if text.startswith(("=", "+", "-", "@", "\t", "\r")):
+        return "'" + text
+    return text
+
+
+def write_csv_row(writer: csv.writer, values: list[object]) -> None:
+    writer.writerow([csv_cell(value) for value in values])
+
+
 def _csv_response(text: str, filename: str) -> Response:
     return Response(
         content=text,
@@ -888,7 +910,7 @@ def export_results(db: Session = Depends(get_db), _: User = Depends(require_orga
     header += ["judge", "judge_status", "judge_overall"]
     header += [criterion["key"] for criterion in criteria]
     header += ["alignment", "alignment_explanation"]
-    writer.writerow(header)
+    write_csv_row(writer, header)
 
     for project in report["projects"]:
         base = [
@@ -909,7 +931,7 @@ def export_results(db: Session = Depends(get_db), _: User = Depends(require_orga
         judges = project["judges"] or [None]
         for judge in judges:
             if judge is None:
-                writer.writerow(base + ["", "", ""] + ["" for _ in criteria] + ["", ""])
+                write_csv_row(writer, base + ["", "", ""] + ["" for _ in criteria] + ["", ""])
                 continue
             evaluation = evaluations.get(judge["judge_id"])
             score_by_key = {}
@@ -924,7 +946,7 @@ def export_results(db: Session = Depends(get_db), _: User = Depends(require_orga
                 row.append("" if value is None else value)
             row.append(evaluation["alignment"] if evaluation else "")
             row.append(evaluation["alignment_explanation"] if evaluation else "")
-            writer.writerow(row)
+            write_csv_row(writer, row)
     return _csv_response(buffer.getvalue(), "results.csv")
 
 
@@ -933,7 +955,8 @@ def export_feedback(db: Session = Depends(get_db), _: User = Depends(require_org
     report = build_results(db)
     buffer = io.StringIO()
     writer = csv.writer(buffer)
-    writer.writerow(
+    write_csv_row(
+        writer,
         [
             "project",
             "track",
@@ -945,13 +968,14 @@ def export_feedback(db: Session = Depends(get_db), _: User = Depends(require_org
             "cross_track_flag",
             "recommended_track",
             "cross_track_explanation",
-        ]
+        ],
     )
     for project in report["projects"]:
         for evaluation in project["evaluations"]:
             if evaluation["status"] != "submitted" and evaluation["submission_count"] <= 0:
                 continue
-            writer.writerow(
+            write_csv_row(
+                writer,
                 [
                     project["project_name"],
                     project["track_name"],
@@ -963,6 +987,6 @@ def export_feedback(db: Session = Depends(get_db), _: User = Depends(require_org
                     "yes" if evaluation["cross_track_flag"] else "no",
                     evaluation["recommended_track_name"] or "",
                     evaluation["cross_track_explanation"],
-                ]
+                ],
             )
     return _csv_response(buffer.getvalue(), "feedback.csv")

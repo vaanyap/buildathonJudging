@@ -10,6 +10,18 @@ from app.config import settings
 from app.database import get_db
 from app.models import User
 
+PUBLISHED_JWT_SECRET = "dev-only-change-me"
+
+
+def require_jwt_secret() -> str:
+    secret = settings.jwt_secret.strip()
+    if len(secret) < 16 or secret == PUBLISHED_JWT_SECRET:
+        raise RuntimeError(
+            "Set JWT_SECRET to a private value of at least 16 characters before starting the API. "
+            "A missing or published signing key cannot be used."
+        )
+    return secret
+
 
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
@@ -25,7 +37,7 @@ def verify_password(password: str, password_hash: str) -> bool:
 def create_token(user: User) -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_exp_minutes)
     payload = {"sub": str(user.id), "role": user.role, "exp": expire}
-    return jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
+    return jwt.encode(payload, require_jwt_secret(), algorithm="HS256")
 
 
 def get_current_user(
@@ -36,7 +48,7 @@ def get_current_user(
         raise HTTPException(status_code=401, detail="Not authenticated")
     token = authorization.split(" ", 1)[1].strip()
     try:
-        payload = jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
+        payload = jwt.decode(token, require_jwt_secret(), algorithms=["HS256"])
         user_id = int(payload["sub"])
     except (jwt.PyJWTError, ValueError, KeyError):
         raise HTTPException(status_code=401, detail="Not authenticated") from None

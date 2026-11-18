@@ -41,8 +41,8 @@ from app.services.evaluations import apply_autosave, mark_viewed, submit_evaluat
 from app.services.submissions_import import import_submissions
 from app.services.timers import get_timer_defaults
 
-ORGANIZER_EMAIL = "organizer@tech.nyu.edu"
-ORGANIZER_PASSWORD = "organizer-demo"
+ORGANIZER_EMAIL = "v@v"
+ORGANIZER_PASSWORD = "v"
 JUDGE_PASSWORD = "judge-demo"
 CSV_PATH = Path(__file__).resolve().parents[2] / "examples" / "submissions_export.csv"
 
@@ -54,7 +54,7 @@ DEFAULT_CRITERIA = [
 ]
 
 JUDGES = [
-    ("Alex Rivera", "alex.rivera@nyu.edu"),
+    ("Alex Rivera", "vpuri22@uwo.ca"),
     ("Jordan Lee", "jordan.lee@nyu.edu"),
     ("Maya Chen", "maya.chen@nyu.edu"),
     ("Priya Patel", "priya.patel@nyu.edu"),

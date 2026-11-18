@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { StatusPill } from "../../components/StatusPill";
@@ -10,11 +10,16 @@ export default function Overview() {
   const [criteria, setCriteria] = useState<Criterion[]>([]);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+  const criteriaDirty = useRef(new Set<number>());
 
   async function load() {
     const overview = await api<Overview>("/api/organizer/overview");
     setData(overview);
-    setCriteria(overview.criteria);
+    setCriteria((current) => {
+      if (criteriaDirty.current.size === 0) return overview.criteria;
+      const edited = new Map(current.map((item) => [item.id, item]));
+      return overview.criteria.map((item) => (criteriaDirty.current.has(item.id) ? edited.get(item.id) ?? item : item));
+    });
   }
 
   useEffect(() => {
@@ -45,13 +50,26 @@ export default function Overview() {
           max_score: criterion.max_score,
         }),
       });
+      criteriaDirty.current.delete(criterion.id);
       setNotice(`Saved “${criterion.name}”.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Couldn't save the rubric");
     }
   }
 
-  if (!data) return <p className="page-loading">Loading overview…</p>;
+  function editCriterion(index: number, patch: Partial<Criterion>) {
+    setCriteria((current) =>
+      current.map((item, itemIndex) => {
+        if (itemIndex !== index) return item;
+        criteriaDirty.current.add(item.id);
+        return { ...item, ...patch };
+      }),
+    );
+  }
+
+  if (!data) {
+    return error ? <p className="banner bad">{error}</p> : <p className="page-loading">Loading overview…</p>;
+  }
   const counts = data.counts;
 
   return (
@@ -145,22 +163,13 @@ export default function Overview() {
             <div key={criterion.id} className="rubric-row">
               <label>
                 Name
-                <input
-                  value={criterion.name}
-                  onChange={(event) =>
-                    setCriteria((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, name: event.target.value } : item)))
-                  }
-                />
+                <input value={criterion.name} onChange={(event) => editCriterion(index, { name: event.target.value })} />
               </label>
               <label>
                 Description
                 <input
                   value={criterion.description}
-                  onChange={(event) =>
-                    setCriteria((current) =>
-                      current.map((item, itemIndex) => (itemIndex === index ? { ...item, description: event.target.value } : item)),
-                    )
-                  }
+                  onChange={(event) => editCriterion(index, { description: event.target.value })}
                 />
               </label>
               <label>
@@ -170,11 +179,7 @@ export default function Overview() {
                   min={1}
                   max={5}
                   value={criterion.min_score}
-                  onChange={(event) =>
-                    setCriteria((current) =>
-                      current.map((item, itemIndex) => (itemIndex === index ? { ...item, min_score: Number(event.target.value) } : item)),
-                    )
-                  }
+                  onChange={(event) => editCriterion(index, { min_score: Number(event.target.value) })}
                 />
               </label>
               <label>
@@ -184,11 +189,7 @@ export default function Overview() {
                   min={1}
                   max={5}
                   value={criterion.max_score}
-                  onChange={(event) =>
-                    setCriteria((current) =>
-                      current.map((item, itemIndex) => (itemIndex === index ? { ...item, max_score: Number(event.target.value) } : item)),
-                    )
-                  }
+                  onChange={(event) => editCriterion(index, { max_score: Number(event.target.value) })}
                 />
               </label>
               <button className="btn small" type="button" onClick={() => void saveCriterion(criterion)}>
