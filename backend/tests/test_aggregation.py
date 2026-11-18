@@ -13,7 +13,7 @@ def _project(client, headers, name: str, track_id: int) -> int:
         json={
             "name": name,
             "description": name,
-            "track_id": track_id,
+            "track_ids": [track_id],
             "team_members": ["Ada Lovelace"],
             "github_url": "",
             "demo_url": "",
@@ -35,25 +35,25 @@ def _judge(client, headers, name: str, email: str) -> tuple[int, dict]:
     return response.json()["id"], login(client, email)
 
 
-def _assign(client, headers, judge_id: int, project_id: int) -> None:
+def _assign(client, headers, judge_id: int, project_id: int, track_id: int) -> None:
     response = client.post(
         "/api/organizer/assignments",
-        json={"judge_id": judge_id, "project_id": project_id},
+        json={"judge_id": judge_id, "project_id": project_id, "track_id": track_id},
         headers=headers,
     )
     assert response.status_code == 201, response.text
 
 
-def _submit(client, headers, project_id: int, scores: dict, alignment: str = "strong", **extra) -> None:
+def _submit(client, headers, project_id: int, track_id: int, scores: dict, alignment: str = "strong", **extra) -> None:
     saved = client.put(
-        f"/api/judge/projects/{project_id}/evaluation",
+        f"/api/judge/projects/{project_id}/tracks/{track_id}/evaluation",
         headers=headers,
         json=evaluation_body(scores=scores, alignment=alignment, **extra),
     )
     assert saved.status_code == 200, saved.text
     if saved.json()["status"] != "ready_to_submit":
         raise AssertionError(saved.text)
-    submitted = client.post(f"/api/judge/projects/{project_id}/evaluation/submit", headers=headers)
+    submitted = client.post(f"/api/judge/projects/{project_id}/tracks/{track_id}/evaluation/submit", headers=headers)
     assert submitted.status_code == 200, submitted.text
 
 
@@ -73,23 +73,24 @@ def test_aggregation_ranks_within_track_and_ignores_drafts(client, db):
     edu_id, edu = _judge(client, organizer, "Sam Okonkwo", "sam@example.com")
 
     for judge_id in (high_id, low_id):
-        _assign(client, organizer, judge_id, split)
+        _assign(client, organizer, judge_id, split, ai)
     for judge_id in (steady_id, high_id, draft_id):
-        _assign(client, organizer, judge_id, polished)
-    _assign(client, organizer, edu_id, lesson)
+        _assign(client, organizer, judge_id, polished, ai)
+    _assign(client, organizer, edu_id, lesson, education)
 
-    _submit(client, high, split, full_scores(5))
+    _submit(client, high, split, ai, full_scores(5))
     _submit(
         client,
         low,
         split,
+        ai,
         {"technical": 2, "innovation": 2, "impact": 4, "presentation": 2},
         alignment="partial",
     )
-    _submit(client, steady, polished, full_scores(4), alignment="weak")
-    _submit(client, high, polished, full_scores(4), alignment="weak")
+    _submit(client, steady, polished, ai, full_scores(4), alignment="weak")
+    _submit(client, high, polished, ai, full_scores(4), alignment="weak")
     draft = client.put(
-        f"/api/judge/projects/{polished}/evaluation",
+        f"/api/judge/projects/{polished}/tracks/{ai}/evaluation",
         headers=drafter,
         json=evaluation_body(
             scores=full_scores(1),
@@ -104,6 +105,7 @@ def test_aggregation_ranks_within_track_and_ignores_drafts(client, db):
         client,
         edu,
         lesson,
+        education,
         full_scores(1),
         cross_track_flag=True,
         recommended_track_id=ai,

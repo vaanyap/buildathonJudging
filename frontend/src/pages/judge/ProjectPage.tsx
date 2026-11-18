@@ -3,8 +3,8 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../../api";
 import { useAuth } from "../../auth";
 import { StatusPill } from "../../components/StatusPill";
-import { formatClock, formatStamp, formatWhen } from "../../format";
-import type { Alignment, Criterion, EvalForm, EvalStatus, Evaluation, ProjectDetail, TimerState } from "../../types";
+import { formatClock, formatStamp, timerStatusLabel } from "../../format";
+import type { Alignment, Criterion, EvalForm, EvalStatus, Evaluation, ProjectDetail, TimerPhase, TimerPhaseKey, TimerState } from "../../types";
 
 function formFrom(evaluation: Evaluation): EvalForm {
   const scores: Record<string, number | null> = {};
@@ -36,13 +36,14 @@ function missingFields(form: EvalForm, criteria: Criterion[]): string[] {
 }
 
 export default function ProjectPage() {
-  const { projectId } = useParams();
+  const { projectId, trackId } = useParams();
   const { user, logout } = useAuth();
   const [detail, setDetail] = useState<ProjectDetail | null>(null);
   const [form, setForm] = useState<EvalForm | null>(null);
   const [status, setStatus] = useState<EvalStatus>("not_started");
   const [reopened, setReopened] = useState(false);
   const [timer, setTimer] = useState<TimerState | null>(null);
+  const [shownPhase, setShownPhase] = useState<TimerPhaseKey>("presentation");
   const [syncedAt, setSyncedAt] = useState(Date.now());
   const [now, setNow] = useState(Date.now());
   const [saveState, setSaveState] = useState<"idle" | "pending" | "saving" | "saved" | "error">("idle");
@@ -51,12 +52,13 @@ export default function ProjectPage() {
   const requestId = useRef(0);
   const saveTimer = useRef<number | null>(null);
   const formRef = useRef<EvalForm | null>(null);
+  const serverPhase = useRef<TimerPhaseKey | null>(null);
   formRef.current = form;
 
   useEffect(() => {
     let cancelled = false;
     setLoadError("");
-    api<ProjectDetail>(`/api/judge/projects/${projectId}`)
+    api<ProjectDetail>(`/api/judge/projects/${projectId}/tracks/${trackId}`)
       .then(async (data) => {
         if (cancelled) return;
         setDetail(data);
@@ -64,9 +66,11 @@ export default function ProjectPage() {
         setStatus(data.evaluation.status);
         setReopened(data.evaluation.reopened);
         setTimer(data.timer);
+        serverPhase.current = data.timer.current_phase;
+        setShownPhase(data.timer.current_phase);
         setSyncedAt(Date.now());
         if (data.evaluation.status === "not_started") {
-          const viewed = await api<Evaluation>(`/api/judge/projects/${projectId}/view`, { method: "POST" });
+          const viewed = await api<Evaluation>(`/api/judge/projects/${projectId}/tracks/${trackId}/view`, { method: "POST" });
           if (!cancelled) setStatus(viewed.status);
         } else if (data.evaluation.status !== "viewed") {
           setSaveState("saved");
@@ -78,13 +82,17 @@ export default function ProjectPage() {
     return () => {
       cancelled = true;
     };
-  }, [projectId]);
+  }, [projectId, trackId]);
 
   useEffect(() => {
     const clock = window.setInterval(() => setNow(Date.now()), 250);
     const poll = window.setInterval(() => {
       void api<TimerState>(`/api/judge/projects/${projectId}/timer`)
         .then((next) => {
+          if (serverPhase.current !== next.current_phase) {
+            serverPhase.current = next.current_phase;
+            setShownPhase(next.current_phase);
+          }
           setTimer(next);
           setSyncedAt(Date.now());
         })
@@ -102,7 +110,7 @@ export default function ProjectPage() {
       window.clearTimeout(saveTimer.current);
       saveTimer.current = null;
       const token = localStorage.getItem("judging_token");
-      void fetch(`/api/judge/projects/${projectId}/evaluation`, {
+      void fetch(`/api/judge/projects/${projectId}/tracks/${trackId}/evaluation`, {
         method: "PUT",
         keepalive: true,
         headers: {
@@ -114,12 +122,12 @@ export default function ProjectPage() {
     };
     window.addEventListener("pagehide", flush);
     return () => window.removeEventListener("pagehide", flush);
-  }, [projectId, status]);
+  }, [projectId, trackId, status]);
 
   useEffect(() => {
     if (status !== "submitted") return;
     const poll = window.setInterval(() => {
-      void api<Evaluation>(`/api/judge/projects/${projectId}/evaluation`)
+      void api<Evaluation>(`/api/judge/projects/${projectId}/tracks/${trackId}/evaluation`)
         .then((evaluation) => {
           if (evaluation.status === "submitted") return;
           setStatus(evaluation.status);
@@ -136,7 +144,7 @@ export default function ProjectPage() {
     const id = ++requestId.current;
     setSaveState("saving");
     try {
-      const saved = await api<Evaluation>(`/api/judge/projects/${projectId}/evaluation`, {
+      const saved = await api<Evaluation>(`/api/judge/projects/${projectId}/tracks/${trackId}/evaluation`, {
         method: "PUT",
         body: JSON.stringify(next),
       });
@@ -167,18 +175,23 @@ export default function ProjectPage() {
     saveTimer.current = window.setTimeout(() => void persist(next), 450);
   }
 
-  async function onTimer(action: "start" | "pause" | "reset") {
-    if (action === "reset" && !window.confirm("Reset the presentation timer?")) return;
+  async function onTimer(phase: TimerPhaseKey, action: "start" | "pause" | "reset") {
+    const label = phase === "qa" ? "Q&A" : "presentation";
+    if (action === "reset" && !window.confirm(`Reset the ${label} timer?`)) return;
     setError("");
     try {
-      const next = await api<TimerState>(`/api/judge/projects/${projectId}/timer/${action}`, { method: "POST" });
+      const next = await api<TimerState>(`/api/judge/projects/${projectId}/timer/${phase}/${action}`, { method: "POST" });
+      serverPhase.current = next.current_phase;
       setTimer(next);
+      setShownPhase(next.current_phase);
       setSyncedAt(Date.now());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Timer update failed");
       const fresh = await api<TimerState>(`/api/judge/projects/${projectId}/timer`).catch(() => null);
       if (fresh) {
+        serverPhase.current = fresh.current_phase;
         setTimer(fresh);
+        setShownPhase(fresh.current_phase);
         setSyncedAt(Date.now());
       }
     }
@@ -194,7 +207,7 @@ export default function ProjectPage() {
     }
     if (!window.confirm("Submit this evaluation? You can edit again only if an organizer reopens it.")) return;
     try {
-      const submitted = await api<Evaluation>(`/api/judge/projects/${projectId}/evaluation/submit`, { method: "POST" });
+      const submitted = await api<Evaluation>(`/api/judge/projects/${projectId}/tracks/${trackId}/evaluation/submit`, { method: "POST" });
       setStatus(submitted.status);
       setReopened(submitted.reopened);
       setSaveState("saved");
@@ -215,12 +228,36 @@ export default function ProjectPage() {
   if (!detail || !form || !timer) return <p className="page-loading">Loading project…</p>;
 
   const locked = status === "submitted";
-  const adjust = timer.status === "running" ? (now - syncedAt) / 1000 : 0;
-  const remaining = Math.max(0, timer.remaining_seconds - adjust);
-  const warning = timer.status === "running" && remaining > 0 && remaining <= 60;
-  const timeUp = timer.time_up || (timer.status === "running" && remaining <= 0);
+  const adjust = (now - syncedAt) / 1000;
+  const presentation = timer.phases.presentation;
+  const qa = timer.phases.qa;
+  const shown = timer.phases[shownPhase] ?? presentation;
+
+  function liveRemaining(phase: TimerPhase): number {
+    if (phase.status !== "running") return phase.remaining_seconds;
+    return Math.max(0, phase.remaining_seconds - adjust);
+  }
+
+  function phaseTimeUp(phase: TimerPhase, remaining: number): boolean {
+    return phase.time_up || (phase.status === "running" && remaining <= 0);
+  }
+
+  const presentationRemaining = liveRemaining(presentation);
+  const qaRemaining = liveRemaining(qa);
+  const shownRemaining = liveRemaining(shown);
+  const presentationTimeUp = phaseTimeUp(presentation, presentationRemaining);
+  const qaTimeUp = phaseTimeUp(qa, qaRemaining);
+  const presentationWarning =
+    presentation.status === "running" &&
+    presentationRemaining > 0 &&
+    presentation.warning_seconds > 0 &&
+    presentationRemaining <= presentation.warning_seconds;
+  const qaWarning =
+    qa.status === "running" && qaRemaining > 0 && qa.warning_seconds > 0 && qaRemaining <= qa.warning_seconds;
+  const shownWarning = shown.key === "qa" ? qaWarning : presentationWarning;
+  const shownTimeUp = shown.key === "qa" ? qaTimeUp : presentationTimeUp;
   const missing = missingFields(form, detail.criteria);
-  const otherTracks = detail.tracks.filter((track) => track.id !== detail.project.track_id);
+  const otherTracks = detail.tracks.filter((track) => track.id !== detail.track_id);
   const saveLabel =
     saveState === "saving" || saveState === "pending"
       ? "Saving…"
@@ -246,45 +283,100 @@ export default function ProjectPage() {
 
       <div className="project-head">
         <div className="meta-row">
-          <span className="track-line">{detail.project.track_name}</span>
+          <span className="track-line">{detail.track_name}</span>
           <StatusPill status={status} />
         </div>
         <h1>{detail.project.name}</h1>
-        <p className="muted">
-          {formatWhen(detail.project.starts_at)}
-          {detail.project.location ? ` · ${detail.project.location}` : ""}
-        </p>
+        <p className="track-line">Scoring for {detail.track_name}</p>
+        {detail.other_tracks.length > 0 && (
+          <p className="muted">You also score this project for {detail.other_tracks.map((track) => track.track_name).join(", ")}.</p>
+        )}
+        <p className="muted">{detail.project.team_members.join(", ") || "Team not listed"}</p>
       </div>
 
-      <section className={`timer ${warning ? "warning" : ""} ${timeUp ? "done" : ""}`} aria-live="polite">
-        <div>
-          <p className="eyebrow">Presentation timer</p>
-          <p className="clock">{formatClock(remaining)}</p>
-          <p className="muted">
-            {timer.scheduled_duration_minutes} min scheduled
-            {timer.extension_minutes > 0 ? ` + ${timer.extension_minutes} min from organizer` : ""}
-            {" · "}
-            {timer.status === "running" ? "Running" : timer.status === "paused" ? "Paused" : timer.status === "time_up" ? "Time is up" : "Not started"}
-          </p>
-          <p className="muted">
-            Actual start {formatStamp(timer.actual_started_at)} · end {formatStamp(timer.actual_ended_at)}
-          </p>
+      <section className={`timer ${shownWarning ? "warning" : ""} ${shownTimeUp ? "done" : ""}`} aria-live="polite">
+        <div className="phase-tabs" role="tablist" aria-label="Timer phases">
+          {([presentation, qa] as const).map((phase) => {
+            const remaining = phase.key === "qa" ? qaRemaining : presentationRemaining;
+            const current = phase.key === timer.current_phase;
+            const mark = !current ? null : phase.key === "qa" && phase.status === "idle" ? "Next" : "Now";
+            return (
+              <button
+                key={phase.key}
+                className={`phase-tab ${shown.key === phase.key ? "on" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={shown.key === phase.key}
+                onClick={() => setShownPhase(phase.key)}
+              >
+                <span className="eyebrow">{mark ?? ""}</span>
+                <span className="phase-name">{phase.label}</span>
+                <strong className="clock">{formatClock(remaining)}</strong>
+                <span className="muted">
+                  {phaseTimeUp(phase, remaining) ? "Time is up" : timerStatusLabel(phase.status)}
+                </span>
+              </button>
+            );
+          })}
         </div>
+        <p className="muted">
+          {shown.scheduled_minutes} min scheduled
+          {shown.extension_minutes > 0 ? ` + ${shown.extension_minutes} min from organizer` : ""}
+          {" · "}
+          {shownTimeUp ? "Time is up" : timerStatusLabel(shown.status)}
+        </p>
+        <p className="muted">
+          Actual start {formatStamp(shown.actual_started_at)} · end {formatStamp(shown.actual_ended_at)}
+        </p>
         <div className="timer-actions">
-          <button className="btn primary" type="button" disabled={timer.status === "running" || remaining <= 0} onClick={() => void onTimer("start")}>
-            Start
+          <button
+            className="btn primary"
+            type="button"
+            disabled={shown.status === "running" || shownRemaining <= 0}
+            onClick={() => void onTimer(shown.key, "start")}
+          >
+            {shown.status === "running"
+              ? shown.key === "qa"
+                ? "Start Q&A"
+                : "Start"
+              : shown.key === "qa"
+                ? shown.status === "idle"
+                  ? "Start Q&A"
+                  : "Resume Q&A"
+                : shown.status === "idle"
+                  ? "Start"
+                  : "Resume"}
           </button>
-          <button className="btn" type="button" disabled={timer.status !== "running"} onClick={() => void onTimer("pause")}>
+          <button className="btn" type="button" disabled={shown.status !== "running"} onClick={() => void onTimer(shown.key, "pause")}>
             Pause
           </button>
-          <button className="btn ghost" type="button" onClick={() => void onTimer("reset")}>
+          <button className="btn ghost" type="button" onClick={() => void onTimer(shown.key, "reset")}>
             Reset
           </button>
         </div>
+        {shown.key === "presentation" && qa.status !== "running" && !qaTimeUp && qaRemaining > 0 && (
+          <button className="btn primary qa-start" type="button" onClick={() => void onTimer("qa", "start")}>
+            {qa.status === "idle" ? "Start Q&A" : "Resume Q&A"}
+          </button>
+        )}
       </section>
 
-      {warning && !timeUp && <p className="banner warn">One minute left.</p>}
-      {timeUp && <p className="banner warn">Time is up. Scoring stays open. An organizer can add time.</p>}
+      {presentationWarning && (
+        <p className="banner warn">
+          {presentation.warning_seconds >= 60
+            ? "One minute left in the presentation."
+            : `${presentation.warning_seconds} seconds left in the presentation.`}
+        </p>
+      )}
+      {qaWarning && (
+        <p className="banner warn">
+          {qa.warning_seconds >= 60 ? "One minute left in Q&A." : `${qa.warning_seconds} seconds left in Q&A.`}
+        </p>
+      )}
+      {presentationTimeUp && qa.status === "idle" && !qaTimeUp && (
+        <p className="banner warn">Presentation time is up. Start Q&A when you're ready. Scoring stays open.</p>
+      )}
+      {qaTimeUp && <p className="banner warn">Q&A time is up. Scoring stays open. An organizer can add time.</p>}
       {reopened && !locked && <p className="banner ok">An organizer reopened this. Submit again when you are done.</p>}
       {locked && <p className="banner ok">Submitted. It stays locked unless an organizer reopens it.</p>}
       {error && <p className="banner bad">{error}</p>}

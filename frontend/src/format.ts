@@ -12,7 +12,15 @@ export const DELAY_LABEL: Record<string, string> = {
   missed: "Missed start",
   overrun: "Running long",
   late_start: "Late start",
+  qa_late: "Q&A not started",
 };
+
+export function timerStatusLabel(status: string | undefined): string {
+  if (status === "running") return "Running";
+  if (status === "paused") return "Paused";
+  if (status === "time_up") return "Time is up";
+  return "Not started";
+}
 
 const ET: Intl.DateTimeFormatOptions = { timeZone: "America/New_York" };
 

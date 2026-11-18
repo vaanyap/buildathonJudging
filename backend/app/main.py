@@ -9,6 +9,7 @@ from sqlalchemy import text
 from app.config import settings
 from app.database import Base, SessionLocal, engine
 import app.models  # noqa: F401  (register models on metadata)
+from app.migrate import upgrade_schema
 from app.seed import seed_if_empty
 from app.routers import auth as auth_router
 from app.routers import judge as judge_router
@@ -33,6 +34,7 @@ def wait_for_db() -> None:
 async def lifespan(_app: FastAPI):
     wait_for_db()
     Base.metadata.create_all(bind=engine)
+    upgrade_schema(engine)
     if settings.seed_on_start:
         db = SessionLocal()
         try:

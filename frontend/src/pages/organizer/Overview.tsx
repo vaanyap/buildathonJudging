@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { StatusPill } from "../../components/StatusPill";
-import { DELAY_LABEL, formatWhen, percent } from "../../format";
+import { percent } from "../../format";
 import type { Criterion, Overview } from "../../types";
 
 export default function Overview() {
@@ -95,16 +95,19 @@ export default function Overview() {
         <div className="panel">
           <div className="panel-head">
             <h2>Delays</h2>
-            <Link to="/organizer/schedule">Schedule</Link>
+            <Link to="/organizer/tracks">Tracks</Link>
           </div>
-          {data.delays.length === 0 && <p className="muted">No delayed presentations right now.</p>}
+          {data.tracks.length === 0 && <p className="muted">No tracks yet.</p>}
           <ul className="plain">
-            {data.delays.map((delay) => (
-              <li key={delay.project_id}>
-                <strong>{delay.project_name}</strong>
-                <span className={`pill delay-${delay.kind}`}>{DELAY_LABEL[delay.kind]}</span>
+            {data.tracks.map((track) => (
+              <li key={track.track_id}>
+                <strong>{track.track_name}</strong>
+                <span className="muted">
+                  {" "}
+                  {track.finished_projects}/{track.project_count} finished
+                </span>
                 <p className="muted">
-                  {formatWhen(delay.starts_at)} · {delay.location} · {delay.detail}
+                  {track.current_project_name ? `${track.current_project_name} · ${track.current_detail}` : track.current_detail}
                 </p>
               </li>
             ))}

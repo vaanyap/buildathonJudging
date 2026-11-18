@@ -16,7 +16,7 @@ def _track_and_project(client, headers, name="Atlas", track_name="Artificial Int
         json={
             "name": name,
             "description": "A demo project",
-            "track_id": track.json()["id"],
+            "track_ids": [track.json()["id"]],
             "team_members": ["Ada Lovelace"],
             "github_url": "https://github.com/example/atlas",
             "demo_url": "https://example.com/demo",
@@ -45,7 +45,7 @@ def test_roles_are_enforced_on_both_surfaces(client, db):
     assert client.get("/api/organizer/export/results.csv", headers=judge).status_code == 403
     assert client.post("/api/organizer/evaluations/1/reopen", headers=judge).status_code == 403
     assert client.get("/api/judge/dashboard", headers=organizer).status_code == 403
-    assert client.get("/api/judge/projects/1", headers=organizer).status_code == 403
+    assert client.get("/api/judge/projects/1/tracks/1", headers=organizer).status_code == 403
 
 
 def test_judge_only_sees_assigned_projects(client, db):
@@ -57,7 +57,7 @@ def test_judge_only_sees_assigned_projects(client, db):
         json={
             "name": "Hidden",
             "description": "Not for this judge",
-            "track_id": project_a["track_id"],
+            "track_ids": [project_a["tracks"][0]["id"]],
             "team_members": ["Grace Hopper"],
             "github_url": "",
             "demo_url": "",
@@ -79,15 +79,16 @@ def test_judge_only_sees_assigned_projects(client, db):
         headers=organizer,
     )
     assert other.status_code == 201, other.text
+    track_id = project_a["tracks"][0]["id"]
     assignment = client.post(
         "/api/organizer/assignments",
-        json={"judge_id": created.json()["id"], "project_id": project_a["id"]},
+        json={"judge_id": created.json()["id"], "project_id": project_a["id"], "track_id": track_id},
         headers=organizer,
     )
     assert assignment.status_code == 201, assignment.text
     other_assignment = client.post(
         "/api/organizer/assignments",
-        json={"judge_id": other.json()["id"], "project_id": project_b.json()["id"]},
+        json={"judge_id": other.json()["id"], "project_id": project_b.json()["id"], "track_id": track_id},
         headers=organizer,
     )
     assert other_assignment.status_code == 201, other_assignment.text
@@ -98,12 +99,12 @@ def test_judge_only_sees_assigned_projects(client, db):
     names = [item["name"] for item in dashboard.json()["projects"]]
     assert names == ["Assigned"]
 
-    assert client.get(f"/api/judge/projects/{project_b.json()['id']}", headers=maya).status_code == 404
-    assert client.get(f"/api/judge/projects/{project_b.json()['id']}/evaluation", headers=maya).status_code == 404
+    assert client.get(f"/api/judge/projects/{project_b.json()['id']}/tracks/{track_id}", headers=maya).status_code == 404
+    assert client.get(f"/api/judge/projects/{project_b.json()['id']}/tracks/{track_id}/evaluation", headers=maya).status_code == 404
 
     jordan = login(client, "jordan@example.com")
     saved = client.put(
-        f"/api/judge/projects/{project_b.json()['id']}/evaluation",
+        f"/api/judge/projects/{project_b.json()['id']}/tracks/{track_id}/evaluation",
         json={
             "scores": {"technical": 2, "innovation": None, "impact": None, "presentation": None},
             "private_notes": SENTINEL,

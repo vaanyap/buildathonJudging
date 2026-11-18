@@ -1,4 +1,4 @@
-from app.models import Criterion, Evaluation, Project, ScheduleSlot
+from app.models import Criterion, Evaluation, Project
 
 
 def iso(value) -> str | None:
@@ -20,34 +20,32 @@ def criterion_dict(criterion: Criterion) -> dict:
     }
 
 
-def schedule_fields(slot: ScheduleSlot | None) -> dict:
-    if slot is None:
-        return {
-            "starts_at": None,
-            "duration_minutes": None,
-            "extension_minutes": 0,
-            "location": "",
-        }
-    return {
-        "starts_at": iso(slot.starts_at),
-        "duration_minutes": slot.duration_minutes,
-        "extension_minutes": slot.extension_minutes,
-        "location": slot.location,
-    }
-
-
 def project_dict(project: Project) -> dict:
+    memberships = sorted(project.memberships, key=lambda item: item.track.name.lower() if item.track is not None else "")
     return {
         "id": project.id,
         "name": project.name,
         "description": project.description,
-        "track_id": project.track_id,
-        "track_name": project.track.name if project.track is not None else "",
         "team_members": list(project.team_members or []),
         "github_url": project.github_url,
         "demo_url": project.demo_url,
+        "video_url": project.video_url,
         "submission_url": project.submission_url,
-        **schedule_fields(project.schedule),
+        "table_location": project.table_location,
+        "submitted_at": iso(project.submitted_at),
+        "winner_label": project.winner_label,
+        "presentation_minutes": project.presentation_minutes,
+        "qa_minutes": project.qa_minutes,
+        "presentation_extension_minutes": project.presentation_extension_minutes,
+        "qa_extension_minutes": project.qa_extension_minutes,
+        "tracks": [
+            {
+                "id": member.track_id,
+                "name": member.track.name if member.track is not None else "",
+                "presentation_order": member.presentation_order,
+            }
+            for member in memberships
+        ],
     }
 
 
@@ -76,6 +74,8 @@ def evaluation_dict(evaluation: Evaluation, include_private: bool) -> dict:
     data = {
         "id": evaluation.id,
         "project_id": evaluation.project_id,
+        "track_id": evaluation.track_id,
+        "track_name": evaluation.track.name if evaluation.track is not None else "",
         "judge_id": evaluation.judge_id,
         "status": evaluation.status,
         "formal_feedback": evaluation.formal_feedback,

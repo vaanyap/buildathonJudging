@@ -10,19 +10,28 @@ export type User = {
 export type EvalStatus = "not_started" | "viewed" | "draft_saved" | "ready_to_submit" | "submitted";
 export type Alignment = "strong" | "partial" | "weak";
 
-export type TimerState = {
-  status: "idle" | "running" | "paused" | "time_up";
+export type TimerPhaseKey = "presentation" | "qa";
+export type TimerStatus = "idle" | "running" | "paused" | "time_up";
+
+export type TimerPhase = {
+  key: TimerPhaseKey;
+  label: string;
+  status: TimerStatus;
   elapsed_seconds: number;
   remaining_seconds: number;
   allowed_seconds: number;
+  warning_seconds: number;
   warning: boolean;
   time_up: boolean;
   actual_started_at: string | null;
   actual_ended_at: string | null;
-  scheduled_duration_minutes: number;
+  scheduled_minutes: number;
   extension_minutes: number;
-  starts_at: string | null;
-  location: string;
+};
+
+export type TimerState = {
+  current_phase: TimerPhaseKey;
+  phases: Record<TimerPhaseKey, TimerPhase>;
 };
 
 export type ScoreValue = {
@@ -77,30 +86,41 @@ export type Criterion = {
 };
 
 export type Track = { id: number; name: string; description?: string };
+export type ProjectTrackInfo = { id: number; name: string; presentation_order: number | null };
 
 export type ProjectFields = {
   id: number;
   name: string;
   description: string;
-  track_id: number;
-  track_name: string;
   team_members: string[];
   github_url: string;
   demo_url: string;
+  video_url: string;
   submission_url: string;
-  starts_at: string | null;
-  duration_minutes: number | null;
-  extension_minutes: number;
-  location: string;
+  table_location: string;
+  submitted_at: string | null;
+  winner_label: string;
+  presentation_minutes: number | null;
+  qa_minutes: number | null;
+  presentation_extension_minutes: number;
+  qa_extension_minutes: number;
+  tracks: ProjectTrackInfo[];
 };
 
 export type JudgeCard = ProjectFields & {
+  track_id: number;
+  track_name: string;
+  presentation_order: number | null;
   status: EvalStatus;
   timer: TimerState;
+  other_tracks: { track_id: number; track_name: string }[];
 };
 
 export type ProjectDetail = {
   project: ProjectFields;
+  track_id: number;
+  track_name: string;
+  other_tracks: { track_id: number; track_name: string }[];
   timer: TimerState;
   evaluation: Evaluation;
   criteria: Criterion[];
@@ -111,6 +131,8 @@ export type AssignmentSummary = {
   assignment_id: number;
   judge_id: number;
   judge_name: string;
+  track_id: number;
+  track_name: string;
   status: EvalStatus;
 };
 
@@ -135,6 +157,9 @@ export type JudgeProgress = {
   judge_id: number;
   judge_name: string;
   status: EvalStatus;
+  current_phase?: TimerPhaseKey;
+  presentation_status?: TimerStatus;
+  qa_status?: TimerStatus;
 };
 
 export type Progress = {
@@ -158,19 +183,21 @@ export type Progress = {
   }[];
 };
 
-export type Delay = {
-  project_id: number;
-  project_name: string;
+export type TrackLive = {
+  track_id: number;
   track_name: string;
-  location: string;
-  starts_at: string;
-  kind: "missed" | "overrun" | "late_start";
-  detail: string;
+  project_count: number;
+  finished_projects: number;
+  current_project_id: number | null;
+  current_project_name: string | null;
+  current_state: string;
+  current_detail: string;
+  judges: { judge_id: number; judge_name: string }[];
 };
 
 export type Overview = {
   counts: Progress["counts"] & { judges: number };
-  delays: Delay[];
+  tracks: TrackLive[];
   missing: {
     project_id: number;
     project_name: string;
@@ -202,23 +229,13 @@ export type ResultProject = {
   criterion_averages: Record<string, number | null>;
   alignment_counts: { strong: number; partial: number; weak: number };
   discrepancy: boolean;
+  discrepancy_status: string | null;
   discrepancy_reasons: string[];
   judges: ResultJudge[];
   evaluations: Evaluation[];
 };
 
 export type ResultsReport = { criteria: Criterion[]; projects: ResultProject[] };
-
-export type ScheduleRow = ProjectFields & {
-  delay: Delay | null;
-  judges: {
-    judge_id: number;
-    judge_name: string;
-    timer_status: string;
-    actual_started_at: string | null;
-    actual_ended_at: string | null;
-  }[];
-};
 
 export type CrossTrackReport = {
   projects: {

@@ -12,20 +12,39 @@ from sqlalchemy.orm import Session
 
 from app.auth import find_user_by_email, hash_password, require_organizer
 from app.database import get_db
-from app.models import Assignment, Evaluation, Project, ScheduleSlot, Track, User
+from app.models import Assignment, Evaluation, Project, ProjectTrack, Track, User
 from app.serialize import criterion_dict, project_dict
 from app.services.aggregation import (
     build_results,
     cross_track_review,
     get_project,
-    list_delays,
     load_projects,
     progress_snapshot,
 )
-from app.services.assignments import create_assignment, delete_assignment
+from app.services.assignments import (
+    assign_judge_to_track,
+    create_assignment,
+    delete_assignment,
+    remove_judge_from_track,
+    sync_project_tracks,
+)
+from app.services.discrepancies import (
+    STATUSES,
+    analyze_project,
+    apply_note_visibility,
+    get_settings,
+    is_active,
+    log_private_note_views,
+    review_for,
+    save_review,
+    status_of,
+)
 from app.services.domain import DomainError
 from app.services.evaluations import active_criteria, reopen_evaluation, utcnow
-from app.services.timers import refresh_all_timers, sync_timer
+from app.services.submissions_import import import_submissions
+from app.services.timers import PhaseName, get_timer_defaults, parse_phase
+from app.services.tracks import track_board
+from app.services.winners import build_winners, winners_csv, winners_markdown
 
 router = APIRouter(prefix="/organizer", tags=["organizer"])
 EASTERN = ZoneInfo("America/New_York")
@@ -46,11 +65,13 @@ class CriterionIn(BaseModel):
 class ProjectIn(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: str = ""
-    track_id: int
+    track_ids: list[int] = Field(default_factory=list)
     team_members: list[str] = Field(default_factory=list)
     github_url: str = ""
     demo_url: str = ""
+    video_url: str = ""
     submission_url: str = ""
+    table_location: str = ""
 
 
 class JudgeIn(BaseModel):
@@ -68,6 +89,12 @@ class JudgePatch(BaseModel):
 class AssignmentIn(BaseModel):
     judge_id: int
     project_id: int
+    track_id: int
+
+
+class TrackJudgeIn(BaseModel):
+    judge_id: int
+    track_id: int
 
 
 class ReassignIn(BaseModel):
@@ -75,14 +102,34 @@ class ReassignIn(BaseModel):
     force: bool = False
 
 
-class ScheduleIn(BaseModel):
-    starts_at: datetime
-    duration_minutes: int = Field(ge=1, le=180)
-    location: str = ""
+class TimingIn(BaseModel):
+    presentation_minutes: int | None = Field(default=None, ge=1, le=180)
+    qa_minutes: int | None = Field(default=None, ge=1, le=180)
+
+
+class OrderIn(BaseModel):
+    presentation_order: int | None = Field(default=None, ge=1, le=500)
 
 
 class ExtendIn(BaseModel):
     minutes: int = Field(ge=1, le=60)
+    phase: PhaseName
+
+
+class DiscrepancySettingsIn(BaseModel):
+    overall_spread: float = Field(ge=0.1, le=4)
+    high_score: int = Field(ge=1, le=5)
+    low_score: int = Field(ge=1, le=5)
+
+
+class DiscrepancyReviewIn(BaseModel):
+    status: str
+    note: str = ""
+
+
+class TimerDefaultsIn(BaseModel):
+    presentation_minutes: int = Field(ge=1, le=180)
+    qa_minutes: int = Field(ge=1, le=180)
 
 
 def _http(exc: DomainError) -> None:
@@ -144,7 +191,6 @@ def _assignment_for_edit(db: Session, assignment_id: int) -> Assignment:
     if assignment.evaluation is not None:
         _ = list(assignment.evaluation.scores)
         _ = list(assignment.evaluation.audits)
-    _ = assignment.timer
     return assignment
 
 
@@ -155,29 +201,38 @@ def _project_admin(project: Project) -> dict:
             "assignment_id": assignment.id,
             "judge_id": assignment.judge_id,
             "judge_name": assignment.judge.name,
+            "track_id": assignment.track_id,
+            "track_name": assignment.track.name if assignment.track is not None else "",
             "status": assignment.evaluation.status if assignment.evaluation is not None else "not_started",
         }
-        for assignment in sorted(project.assignments, key=lambda item: item.judge.name.lower())
+        for assignment in sorted(project.assignments, key=lambda item: (item.track.name.lower(), item.judge.name.lower()))
     ]
     return data
 
 
-def _apply_project(project: Project, body: ProjectIn, track: Track) -> None:
+def _apply_project(project: Project, body: ProjectIn) -> None:
     project.name = body.name.strip()
     project.description = body.description.strip()
-    project.track = track
-    project.track_id = track.id
     project.team_members = _members(body.team_members)
     project.github_url = _clean_url(body.github_url, "GitHub link")
     project.demo_url = _clean_url(body.demo_url, "Demo link")
+    project.video_url = _clean_url(body.video_url, "Video link")
     project.submission_url = _clean_url(body.submission_url, "Submission link")
+    project.table_location = body.table_location.strip()
     project.updated_at = utcnow()
+
+
+def _tracks_for(db: Session, track_ids: list[int]) -> list[Track]:
+    tracks = []
+    for track_id in track_ids:
+        tracks.append(_get_track(db, track_id))
+    return tracks
 
 
 @router.get("/overview")
 def overview(db: Session = Depends(get_db), _: User = Depends(require_organizer)) -> dict:
     progress = progress_snapshot(db)
-    delays = list_delays(db)
+    board = track_board(db)
     missing = []
     for project in progress["projects"]:
         outstanding = [judge for judge in project["judges"] if judge["status"] != "submitted"]
@@ -196,7 +251,7 @@ def overview(db: Session = Depends(get_db), _: User = Depends(require_organizer)
     _commit(db)
     return {
         "counts": {**progress["counts"], "judges": int(judge_count or 0)},
-        "delays": delays,
+        "tracks": board["tracks"],
         "missing": missing,
         "criteria": [criterion_dict(criterion) for criterion in active_criteria(db)],
     }
@@ -257,13 +312,15 @@ def projects(db: Session = Depends(get_db), _: User = Depends(require_organizer)
 
 @router.post("/projects", status_code=201)
 def create_project(body: ProjectIn, db: Session = Depends(get_db), _: User = Depends(require_organizer)) -> dict:
-    track = _get_track(db, body.track_id)
-    project = Project(name="", description="", track_id=track.id, team_members=[])
+    project = Project(name="", description="", team_members=[])
     try:
-        _apply_project(project, body, track)
+        _apply_project(project, body)
+        db.add(project)
+        db.flush()
+        sync_project_tracks(db, project, _tracks_for(db, body.track_ids))
     except DomainError as exc:
+        db.rollback()
         _http(exc)
-    db.add(project)
     _commit(db)
     return _project_admin(_require_project(db, project.id))
 
@@ -276,10 +333,12 @@ def update_project(
     _: User = Depends(require_organizer),
 ) -> dict:
     project = _require_project(db, project_id)
-    track = _get_track(db, body.track_id)
     try:
-        _apply_project(project, body, track)
+        _apply_project(project, body)
+        if body.track_ids:
+            sync_project_tracks(db, project, _tracks_for(db, body.track_ids))
     except DomainError as exc:
+        db.rollback()
         _http(exc)
     _commit(db)
     return _project_admin(_require_project(db, project.id))
@@ -302,8 +361,6 @@ def remove_project(
                 raise DomainError("This project has saved drafts. Confirm to delete it.", 409)
         for assignment in list(project.assignments):
             delete_assignment(db, assignment, force=True)
-        if project.schedule is not None:
-            db.delete(project.schedule)
         db.delete(project)
     except DomainError as exc:
         db.rollback()
@@ -315,6 +372,7 @@ def remove_project(
 @router.post("/projects/import")
 async def import_projects(
     file: UploadFile = File(...),
+    dry_run: bool = False,
     db: Session = Depends(get_db),
     _: User = Depends(require_organizer),
 ) -> dict:
@@ -323,51 +381,14 @@ async def import_projects(
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="CSV must be UTF-8") from None
-    reader = csv.DictReader(io.StringIO(text))
-    if not reader.fieldnames:
-        raise HTTPException(status_code=400, detail="CSV is missing a header row")
-    fields = {(name or "").strip().lower() for name in reader.fieldnames}
-    if "name" not in fields or "track" not in fields:
-        raise HTTPException(status_code=400, detail="CSV must include name and track columns")
-
-    tracks_by_name = {track.name.lower(): track for track in db.scalars(select(Track)).all()}
-    created = 0
-    errors: list[dict] = []
-    for index, raw_row in enumerate(reader, start=2):
-        row = {(key or "").strip().lower(): (value or "").strip() for key, value in raw_row.items()}
-        name = row.get("name", "")
-        track_name = row.get("track", "")
-        if not name or not track_name:
-            errors.append({"row": index, "message": "Name and track are required"})
-            continue
-        track = tracks_by_name.get(track_name.lower())
-        if track is None:
-            track = Track(name=track_name, description="")
-            db.add(track)
-            db.flush()
-            tracks_by_name[track.name.lower()] = track
-        members = [part.strip() for part in row.get("team_members", "").split(";") if part.strip()]
-        project = Project(
-            name=name,
-            description=row.get("description", ""),
-            track_id=track.id,
-            team_members=members,
-            github_url="",
-            demo_url="",
-            submission_url="",
-            updated_at=utcnow(),
-        )
-        try:
-            project.github_url = _clean_url(row.get("github_url", ""), "GitHub link")
-            project.demo_url = _clean_url(row.get("demo_url", ""), "Demo link")
-            project.submission_url = _clean_url(row.get("submission_url", ""), "Submission link")
-        except DomainError as exc:
-            errors.append({"row": index, "message": exc.message})
-            continue
-        db.add(project)
-        created += 1
-    _commit(db)
-    return {"created": created, "errors": errors}
+    try:
+        summary = import_submissions(db, text, dry_run=dry_run)
+    except DomainError as exc:
+        db.rollback()
+        _http(exc)
+    if not dry_run:
+        _commit(db)
+    return summary
 
 
 def _judge_payload(db: Session, judge: User) -> dict:
@@ -381,11 +402,14 @@ def _judge_payload(db: Session, judge: User) -> dict:
         status = evaluation.status if evaluation is not None else "not_started"
         if status == "submitted":
             submitted += 1
+        track = db.get(Track, assignment.track_id)
         payload_assignments.append(
             {
                 "assignment_id": assignment.id,
                 "project_id": assignment.project_id,
                 "project_name": project.name if project is not None else "",
+                "track_id": assignment.track_id,
+                "track_name": track.name if track is not None else "",
                 "status": status,
             }
         )
@@ -447,8 +471,9 @@ def update_judge(
 def assign(body: AssignmentIn, db: Session = Depends(get_db), _: User = Depends(require_organizer)) -> dict:
     judge = _get_judge(db, body.judge_id)
     project = _require_project(db, body.project_id)
+    track = _get_track(db, body.track_id)
     try:
-        assignment = create_assignment(db, judge, project)
+        assignment = create_assignment(db, judge, project, track)
     except DomainError as exc:
         db.rollback()
         _http(exc)
@@ -471,6 +496,7 @@ def reassign(
     assignment = _assignment_for_edit(db, assignment_id)
     judge = _get_judge(db, body.judge_id)
     project = assignment.project
+    track = assignment.track
     if judge.id == assignment.judge_id:
         return {
             "assignment_id": assignment.id,
@@ -479,8 +505,8 @@ def reassign(
             "status": assignment.evaluation.status if assignment.evaluation else "not_started",
         }
     try:
-        delete_assignment(db, assignment, body.force)
-        created = create_assignment(db, judge, project)
+        delete_assignment(db, assignment, body.force, exclude=True)
+        created = create_assignment(db, judge, project, track)
     except DomainError as exc:
         db.rollback()
         _http(exc)
@@ -502,7 +528,7 @@ def unassign(
 ) -> dict:
     assignment = _assignment_for_edit(db, assignment_id)
     try:
-        delete_assignment(db, assignment, force)
+        delete_assignment(db, assignment, force, exclude=True)
     except DomainError as exc:
         db.rollback()
         _http(exc)
@@ -510,94 +536,277 @@ def unassign(
     return {"ok": True}
 
 
-def _schedule_row(project: Project, delays_by_id: dict[int, dict]) -> dict:
-    data = project_dict(project)
-    data["delay"] = delays_by_id.get(project.id)
-    judges = []
-    for assignment in sorted(project.assignments, key=lambda item: item.judge.name.lower()):
-        timer = assignment.timer
-        view = sync_timer(timer, project.schedule) if timer is not None else None
-        judges.append(
-            {
-                "judge_id": assignment.judge_id,
-                "judge_name": assignment.judge.name,
-                "timer_status": view["status"] if view else "idle",
-                "actual_started_at": view["actual_started_at"] if view else None,
-                "actual_ended_at": view["actual_ended_at"] if view else None,
-            }
-        )
-    data["judges"] = judges
-    return data
+def _defaults_payload(db: Session) -> dict:
+    defaults = get_timer_defaults(db)
+    return {
+        "presentation_minutes": defaults.presentation_minutes,
+        "qa_minutes": defaults.qa_minutes,
+    }
 
 
-@router.get("/schedule")
-def schedule(db: Session = Depends(get_db), _: User = Depends(require_organizer)) -> dict:
-    refresh_all_timers(db)
-    delays = {item["project_id"]: item for item in list_delays(db)}
-    rows = [_schedule_row(project, delays) for project in load_projects(db)]
-    rows.sort(key=lambda item: (item["starts_at"] is None, item["starts_at"] or "", item["name"].lower()))
+@router.get("/timer-defaults")
+def read_timer_defaults(db: Session = Depends(get_db), _: User = Depends(require_organizer)) -> dict:
+    payload = _defaults_payload(db)
     _commit(db)
-    return {"projects": rows}
+    return payload
 
 
-@router.put("/schedule/{project_id}")
-def save_schedule(
+@router.put("/timer-defaults")
+def save_timer_defaults(
+    body: TimerDefaultsIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_organizer),
+) -> dict:
+    defaults = get_timer_defaults(db)
+    defaults.presentation_minutes = body.presentation_minutes
+    defaults.qa_minutes = body.qa_minutes
+    defaults.updated_at = utcnow()
+    _commit(db)
+    return _defaults_payload(db)
+
+
+@router.get("/tracks/live")
+def live_tracks(db: Session = Depends(get_db), _: User = Depends(require_organizer)) -> dict:
+    board = track_board(db)
+    _commit(db)
+    return board
+
+
+@router.post("/track-assignments", status_code=201)
+def add_track_judge(body: TrackJudgeIn, db: Session = Depends(get_db), _: User = Depends(require_organizer)) -> dict:
+    judge = _get_judge(db, body.judge_id)
+    track = _get_track(db, body.track_id)
+    try:
+        row = assign_judge_to_track(db, judge, track)
+    except DomainError as exc:
+        db.rollback()
+        _http(exc)
+    _commit(db)
+    return {"id": row.id, "judge_id": judge.id, "track_id": track.id}
+
+
+@router.delete("/track-assignments")
+def remove_track_judge(
+    judge_id: int,
+    track_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_organizer),
+) -> dict:
+    judge = _get_judge(db, judge_id)
+    track = _get_track(db, track_id)
+    try:
+        remove_judge_from_track(db, judge, track)
+    except DomainError as exc:
+        db.rollback()
+        _http(exc)
+    _commit(db)
+    return {"ok": True}
+
+
+@router.put("/projects/{project_id}/timing")
+def save_timing(
     project_id: int,
-    body: ScheduleIn,
+    body: TimingIn,
     db: Session = Depends(get_db),
     _: User = Depends(require_organizer),
 ) -> dict:
     project = _require_project(db, project_id)
-    starts_at = _as_eastern(body.starts_at)
-    slot = project.schedule
-    now = utcnow()
-    if slot is None:
-        slot = ScheduleSlot(
-            project_id=project.id,
-            starts_at=starts_at,
-            duration_minutes=body.duration_minutes,
-            extension_minutes=0,
-            location=body.location.strip(),
-            updated_at=now,
-        )
-        db.add(slot)
-        project.schedule = slot
-    else:
-        slot.starts_at = starts_at
-        slot.duration_minutes = body.duration_minutes
-        slot.location = body.location.strip()
-        slot.updated_at = now
+    project.presentation_minutes = body.presentation_minutes
+    project.qa_minutes = body.qa_minutes
+    project.updated_at = utcnow()
     _commit(db)
+    return project_dict(_require_project(db, project_id))
+
+
+@router.put("/projects/{project_id}/tracks/{track_id}/order")
+def save_order(
+    project_id: int,
+    track_id: int,
+    body: OrderIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_organizer),
+) -> dict:
     project = _require_project(db, project_id)
-    delays = {item["project_id"]: item for item in list_delays(db)}
+    member = next((item for item in project.memberships if item.track_id == track_id), None)
+    if member is None:
+        raise HTTPException(status_code=404, detail="That project is not in this track")
+    member.presentation_order = body.presentation_order
     _commit(db)
-    return _schedule_row(project, delays)
+    return project_dict(_require_project(db, project_id))
 
 
-@router.post("/schedule/{project_id}/extend")
-def extend_schedule(
+@router.post("/projects/{project_id}/timer/extend")
+def extend_timer(
     project_id: int,
     body: ExtendIn,
     db: Session = Depends(get_db),
     _: User = Depends(require_organizer),
 ) -> dict:
     project = _require_project(db, project_id)
-    if project.schedule is None:
-        raise HTTPException(status_code=400, detail="Set a time slot before extending it")
-    project.schedule.extension_minutes += body.minutes
-    project.schedule.updated_at = utcnow()
+    try:
+        phase = parse_phase(body.phase)
+    except DomainError as exc:
+        _http(exc)
+        raise
+    if phase == "presentation":
+        project.presentation_extension_minutes += body.minutes
+    else:
+        project.qa_extension_minutes += body.minutes
+    project.updated_at = utcnow()
     _commit(db)
+    return project_dict(_require_project(db, project_id))
+
+
+def _review_payload(review) -> dict | None:
+    if review is None:
+        return None
+    return {
+        "status": review.status,
+        "note": review.note,
+        "updated_by": review.updated_by.name if review.updated_by is not None else None,
+        "updated_at": review.updated_at.isoformat() if review.updated_at else None,
+    }
+
+
+def _discrepancy_rows(db: Session, reveal_key: tuple[int, int] | None = None, actor: User | None = None) -> list[dict]:
+    from app.services.evaluations import active_criteria
+
+    settings = get_settings(db)
+    criteria = active_criteria(db)
+    rows = []
+    for project in load_projects(db):
+        for member in project.memberships:
+            analysis = analyze_project(project, criteria, settings, member.track_id)
+            if analysis is None:
+                continue
+            review = review_for(db, project.id, member.track_id)
+            reveal = reveal_key == (project.id, member.track_id)
+            revealed = apply_note_visibility(analysis, review, reveal and is_active(analysis, review))
+            if reveal and actor is not None and revealed:
+                log_private_note_views(db, actor, project, revealed)
+            rows.append(
+                {
+                    "project_id": project.id,
+                    "project_name": project.name,
+                    "track_id": member.track_id,
+                    "track_name": member.track.name,
+                    "active": is_active(analysis, review),
+                    "status": status_of(review) if analysis else "open",
+                    "reasons": analysis["reasons"],
+                    "divergent_criteria": analysis["divergent_criteria"],
+                    "involved_judge_ids": analysis["involved_judge_ids"],
+                    "review": _review_payload(review) or {"status": "open", "note": "", "updated_by": None, "updated_at": None},
+                    "judges": analysis["judges"],
+                }
+            )
+    rows.sort(key=lambda item: (not item["active"], item["track_name"].lower(), item["project_name"].lower()))
+    return rows
+
+
+@router.get("/discrepancy-settings")
+def read_discrepancy_settings(db: Session = Depends(get_db), _: User = Depends(require_organizer)) -> dict:
+    row = get_settings(db)
+    _commit(db)
+    return {"overall_spread": row.overall_spread, "high_score": row.high_score, "low_score": row.low_score}
+
+
+@router.put("/discrepancy-settings")
+def save_discrepancy_settings(
+    body: DiscrepancySettingsIn,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_organizer),
+) -> dict:
+    if body.low_score >= body.high_score:
+        raise HTTPException(status_code=400, detail="Low score must be below the high score")
+    row = get_settings(db)
+    row.overall_spread = body.overall_spread
+    row.high_score = body.high_score
+    row.low_score = body.low_score
+    row.updated_at = utcnow()
+    _commit(db)
+    return {"overall_spread": row.overall_spread, "high_score": row.high_score, "low_score": row.low_score}
+
+
+@router.get("/discrepancies")
+def discrepancies(db: Session = Depends(get_db), _: User = Depends(require_organizer)) -> dict:
+    rows = _discrepancy_rows(db)
+    _commit(db)
+    return {"projects": [row for row in rows if row["active"]]}
+
+
+@router.get("/discrepancies/{project_id}/tracks/{track_id}")
+def discrepancy_detail(
+    project_id: int,
+    track_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_organizer),
+) -> dict:
+    rows = _discrepancy_rows(db, reveal_key=(project_id, track_id), actor=user)
+    match = next((row for row in rows if row["project_id"] == project_id and row["track_id"] == track_id), None)
+    if match is None or not match["active"]:
+        db.rollback()
+        raise HTTPException(status_code=404, detail="No active discrepancy for that project and track")
+    _commit(db)
+    return match
+
+
+@router.patch("/discrepancies/{project_id}/tracks/{track_id}")
+def update_discrepancy(
+    project_id: int,
+    track_id: int,
+    body: DiscrepancyReviewIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_organizer),
+) -> dict:
+    if body.status not in STATUSES:
+        raise HTTPException(status_code=400, detail="Status must be open, discussing, or resolved")
     project = _require_project(db, project_id)
-    delays = {item["project_id"]: item for item in list_delays(db)}
+    settings = get_settings(db)
+    analysis = analyze_project(project, active_criteria(db), settings, track_id)
+    if analysis is None:
+        raise HTTPException(status_code=404, detail="That project is not flagged in this track")
+    try:
+        save_review(db, project, track_id, user, body.status, body.note)
+    except DomainError as exc:
+        db.rollback()
+        _http(exc)
     _commit(db)
-    return _schedule_row(project, delays)
+    rows = _discrepancy_rows(db)
+    match = next((row for row in rows if row["project_id"] == project_id and row["track_id"] == track_id), None)
+    _commit(db)
+    return match or {"project_id": project_id, "track_id": track_id, "active": False, "status": body.status}
 
 
-@router.get("/delays")
-def delays(db: Session = Depends(get_db), _: User = Depends(require_organizer)) -> list[dict]:
-    found = list_delays(db)
-    _commit(db)
-    return found
+@router.get("/winners")
+def winners(
+    per_track: int = Query(default=1, ge=1, le=10),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_organizer),
+) -> dict:
+    return build_winners(db, per_track)
+
+
+@router.get("/winners.csv")
+def winners_export_csv(
+    per_track: int = Query(default=1, ge=1, le=10),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_organizer),
+) -> Response:
+    return _csv_response(winners_csv(build_winners(db, per_track)), "winners.csv")
+
+
+@router.get("/winners.md")
+def winners_export_md(
+    per_track: int = Query(default=1, ge=1, le=10),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_organizer),
+) -> Response:
+    report = build_winners(db, per_track)
+    return Response(
+        content=winners_markdown(report),
+        media_type="text/markdown",
+        headers={"Content-Disposition": 'attachment; filename="winners.md"'},
+    )
 
 
 @router.get("/progress")
@@ -641,7 +850,7 @@ def reopen(
         _ = score.criterion
     _ = evaluation.recommended_track
     try:
-        reopen_evaluation(db, evaluation, user, project.track_id)
+        reopen_evaluation(db, evaluation, user, evaluation.track_id)
     except DomainError as exc:
         db.rollback()
         _http(exc)
