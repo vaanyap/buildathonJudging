@@ -9,6 +9,7 @@ from app.config import settings
 from app.database import Base, engine
 import app.models  # noqa: F401  (register models on metadata)
 from app.routers import auth as auth_router
+from app.routers import judge as judge_router
 
 
 def wait_for_db() -> None:
@@ -40,6 +41,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(auth_router.router, prefix="/api")
+app.include_router(judge_router.router, prefix="/api")
 
 
 @app.get("/api/health")
