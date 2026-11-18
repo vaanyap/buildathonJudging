@@ -9,6 +9,9 @@ class Settings(BaseSettings):
     jwt_exp_minutes: int = 60 * 12
     seed_on_start: bool = True
     cors_origins: str = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:8080"
+    winner_summary_api_url: str = ""
+    winner_summary_api_key: str = ""
+    winner_summary_model: str = "gpt-4o-mini"
 
     @property
     def cors_origin_list(self) -> list[str]:

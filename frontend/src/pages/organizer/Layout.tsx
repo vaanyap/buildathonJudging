@@ -5,9 +5,11 @@ const LINKS = [
   { to: "/organizer", label: "Overview", end: true },
   { to: "/organizer/projects", label: "Projects", end: false },
   { to: "/organizer/judges", label: "Judges", end: false },
-  { to: "/organizer/schedule", label: "Schedule", end: false },
+  { to: "/organizer/tracks", label: "Tracks", end: false },
   { to: "/organizer/progress", label: "Live progress", end: false },
   { to: "/organizer/results", label: "Results", end: false },
+  { to: "/organizer/winners", label: "Winners", end: false },
+  { to: "/organizer/discrepancies", label: "Discrepancies", end: false },
   { to: "/organizer/cross-track", label: "Cross-track", end: false },
 ];
 

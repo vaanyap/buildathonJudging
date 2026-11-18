@@ -3,16 +3,18 @@ import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { useAuth } from "../../auth";
 import { StatusPill } from "../../components/StatusPill";
-import { formatClock, formatWhen } from "../../format";
-import type { JudgeCard } from "../../types";
+import { formatClock } from "../../format";
+import type { JudgeCard, TimerState } from "../../types";
 
-type Filter = "all" | "upcoming" | "open" | "submitted";
+type Filter = "all" | "open" | "submitted";
 
-function isUpcoming(project: JudgeCard, now: number): boolean {
-  if (project.status === "submitted") return false;
-  if (!project.starts_at) return true;
-  const start = new Date(project.starts_at).getTime();
-  return start >= now - 15 * 60 * 1000;
+function timerLine(timer: TimerState): string {
+  const phase = timer.phases[timer.current_phase];
+  if (phase.status === "running") return `${phase.label} · ${formatClock(phase.remaining_seconds)} left`;
+  if (phase.status === "paused") return `${phase.label} · paused`;
+  if (phase.time_up) return `${phase.label} · time is up`;
+  if (timer.current_phase === "qa" && timer.phases.presentation.time_up) return "Q&A not started";
+  return "";
 }
 
 export default function JudgeDashboard() {
@@ -20,7 +22,6 @@ export default function JudgeDashboard() {
   const [projects, setProjects] = useState<JudgeCard[]>([]);
   const [filter, setFilter] = useState<Filter>("all");
   const [error, setError] = useState("");
-  const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
     let cancelled = false;
@@ -31,22 +32,17 @@ export default function JudgeDashboard() {
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof Error ? err.message : "Couldn't load projects");
       });
-    const clock = window.setInterval(() => setNow(Date.now()), 30000);
     return () => {
       cancelled = true;
-      window.clearInterval(clock);
     };
   }, []);
 
   const visible = projects.filter((project) => {
     if (filter === "submitted") return project.status === "submitted";
     if (filter === "open") return project.status !== "submitted";
-    if (filter === "upcoming") return isUpcoming(project, now);
     return true;
   });
-  const next =
-    projects.find((project) => project.status !== "submitted" && isUpcoming(project, now)) ??
-    projects.find((project) => project.status !== "submitted");
+  const next = projects.find((project) => project.status !== "submitted");
 
   return (
     <div className="judge-shell">
@@ -62,15 +58,15 @@ export default function JudgeDashboard() {
           </button>
         </div>
       </header>
-      <p className="lede">Open any project. Order is a suggestion, not a sequence. Drafts stay private until you submit.</p>
+      <p className="lede">Each card is one prize category. Score a project once for every track you are assigned.</p>
       {error && <p className="banner bad">{error}</p>}
       {next && (
-        <Link className="next-card" to={`/judge/projects/${next.id}`}>
+        <Link className="next-card" to={`/judge/projects/${next.id}/tracks/${next.track_id}`}>
           <span className="eyebrow">Up next</span>
           <strong>{next.name}</strong>
           <span>
-            {formatWhen(next.starts_at)}
-            {next.location ? ` · ${next.location}` : ""}
+            {next.track_name}
+            {next.presentation_order ? ` · ${next.presentation_order}` : ""}
           </span>
         </Link>
       )}
@@ -78,7 +74,6 @@ export default function JudgeDashboard() {
         {(
           [
             ["all", "All"],
-            ["upcoming", "Up next"],
             ["open", "Needs scoring"],
             ["submitted", "Submitted"],
           ] as const
@@ -95,22 +90,24 @@ export default function JudgeDashboard() {
         ))}
       </div>
       <div className="stack">
-        {visible.map((project) => (
-          <Link key={project.id} className="card card-link" to={`/judge/projects/${project.id}`}>
-            <div className="meta-row">
-              <span className="time">{formatWhen(project.starts_at)}</span>
-              <StatusPill status={project.status} />
-            </div>
-            <h2>{project.name}</h2>
-            <p className="track-line">{project.track_name}</p>
-            <p className="muted">{project.team_members.join(", ") || "Team not listed"}</p>
-            <p className="muted">
-              {project.location || "Room TBA"}
-              {project.timer.status === "running" ? ` · ${formatClock(project.timer.remaining_seconds)} left` : ""}
-              {project.timer.time_up ? " · Time is up" : ""}
-            </p>
-          </Link>
-        ))}
+        {visible.map((project) => {
+          const line = timerLine(project.timer);
+          return (
+            <Link key={`${project.id}-${project.track_id}`} className="card card-link" to={`/judge/projects/${project.id}/tracks/${project.track_id}`}>
+              <div className="meta-row">
+                <span className="time">{project.presentation_order ? `#${project.presentation_order}` : "Unordered"}</span>
+                <StatusPill status={project.status} />
+              </div>
+              <h2>{project.name}</h2>
+              <p className="track-line">{project.track_name}</p>
+              <p className="muted">{project.team_members.join(", ") || "Team not listed"}</p>
+              {project.other_tracks.length > 0 && (
+                <p className="muted">Also score for {project.other_tracks.map((track) => track.track_name).join(", ")}</p>
+              )}
+              {line && <p className="muted">{line}</p>}
+            </Link>
+          );
+        })}
         {!error && visible.length === 0 && <p className="empty">Nothing in this filter.</p>}
       </div>
     </div>

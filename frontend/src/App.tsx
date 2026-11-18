@@ -10,7 +10,9 @@ import Monitoring from "./pages/organizer/Monitoring";
 import Overview from "./pages/organizer/Overview";
 import Projects from "./pages/organizer/Projects";
 import Results from "./pages/organizer/Results";
-import Schedule from "./pages/organizer/Schedule";
+import Discrepancies from "./pages/organizer/Discrepancies";
+import Tracks from "./pages/organizer/Tracks";
+import Winners from "./pages/organizer/Winners";
 import type { Role } from "./types";
 
 function Home() {
@@ -43,7 +45,7 @@ export default function App() {
         }
       />
       <Route
-        path="/judge/projects/:projectId"
+        path="/judge/projects/:projectId/tracks/:trackId"
         element={
           <RequireRole role="judge">
             <ProjectPage />
@@ -61,9 +63,11 @@ export default function App() {
         <Route index element={<Overview />} />
         <Route path="projects" element={<Projects />} />
         <Route path="judges" element={<Judges />} />
-        <Route path="schedule" element={<Schedule />} />
+        <Route path="tracks" element={<Tracks />} />
         <Route path="progress" element={<Monitoring />} />
         <Route path="results" element={<Results />} />
+        <Route path="winners" element={<Winners />} />
+        <Route path="discrepancies" element={<Discrepancies />} />
         <Route path="cross-track" element={<CrossTrack />} />
       </Route>
       <Route path="*" element={<Home />} />
