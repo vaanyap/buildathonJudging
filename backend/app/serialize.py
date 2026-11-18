@@ -89,6 +89,7 @@ def evaluation_dict(evaluation: Evaluation, include_private: bool) -> dict:
         "submitted_at": iso(evaluation.submitted_at),
         "updated_at": iso(evaluation.updated_at),
         "submission_count": evaluation.submission_count,
+        "revision": evaluation.revision,
         "reopened": evaluation.submission_count > 0 and evaluation.status != "submitted",
     }
     if include_private:

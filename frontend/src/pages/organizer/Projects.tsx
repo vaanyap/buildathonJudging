@@ -217,7 +217,7 @@ export default function Projects() {
           <p className="lede">Add projects, import a CSV, and assign judges. Submitted scorecards block deletion.</p>
         </div>
         <div className="toolbar">
-          <label className="btn">
+          <label className="btn file-label">
             Import CSV
             <input
               className="file-input"

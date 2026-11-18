@@ -5,7 +5,7 @@ the schedule duration plus organizer extensions, the accumulated seconds, and
 whether the clock is currently running.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -28,16 +28,24 @@ def _elapsed(timer: Timer, now: datetime) -> int:
     return timer.accumulated_seconds + extra
 
 
+def _mark_time_up(timer: Timer, allowed: int, now: datetime) -> None:
+    """Record the moment the clock actually hit zero, even if we notice later."""
+    bank = timer.accumulated_seconds
+    segment = max(0, allowed - bank)
+    ended = timer.running_since + timedelta(seconds=segment) if timer.running_since is not None else now
+    timer.accumulated_seconds = allowed
+    timer.running_since = None
+    timer.status = "time_up"
+    if timer.actual_ended_at is None:
+        timer.actual_ended_at = ended
+    timer.updated_at = now
+
+
 def sync_timer(timer: Timer, slot: ScheduleSlot | None, now: datetime | None = None) -> dict:
     now = now or utcnow()
     allowed = allowed_seconds(slot)
     if timer.status == "running" and _elapsed(timer, now) >= allowed:
-        timer.accumulated_seconds = allowed
-        timer.running_since = None
-        timer.status = "time_up"
-        if timer.actual_ended_at is None:
-            timer.actual_ended_at = now
-        timer.updated_at = now
+        _mark_time_up(timer, allowed, now)
 
     if timer.status == "running":
         elapsed = _elapsed(timer, now)
@@ -90,16 +98,13 @@ def pause_timer(timer: Timer, slot: ScheduleSlot | None) -> dict:
         return sync_timer(timer, slot, now)
     allowed = allowed_seconds(slot)
     elapsed = _elapsed(timer, now)
-    timer.running_since = None
     if elapsed >= allowed:
-        timer.accumulated_seconds = allowed
-        timer.status = "time_up"
-        if timer.actual_ended_at is None:
-            timer.actual_ended_at = now
+        _mark_time_up(timer, allowed, now)
     else:
         timer.accumulated_seconds = elapsed
+        timer.running_since = None
         timer.status = "paused"
-    timer.updated_at = now
+        timer.updated_at = now
     return sync_timer(timer, slot, now)
 
 

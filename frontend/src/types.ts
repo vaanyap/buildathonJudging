@@ -59,6 +59,7 @@ export type Evaluation = {
   submitted_at: string | null;
   updated_at: string | null;
   submission_count: number;
+  revision: number;
   reopened: boolean;
   judge_name?: string;
   overall?: number | null;

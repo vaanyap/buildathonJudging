@@ -65,7 +65,9 @@ export default function Results() {
     }
   }
 
-  if (!report) return <p className="page-loading">Loading results…</p>;
+  if (!report) {
+    return error ? <p className="banner bad">{error}</p> : <p className="page-loading">Loading results…</p>;
+  }
   const tracks = Array.from(new Set(report.projects.map((project) => project.track_name))).sort();
   const rows = report.projects.filter((project) => track === "all" || project.track_name === track);
   const discrepancies = report.projects.filter((project) => project.discrepancy);

@@ -12,6 +12,7 @@ class EvaluationIn(BaseModel):
     cross_track_flag: bool = False
     recommended_track_id: int | None = None
     cross_track_explanation: str = ""
+    revision: int | None = None
 
     @field_validator("alignment", mode="before")
     @classmethod

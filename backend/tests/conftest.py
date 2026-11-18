@@ -2,7 +2,7 @@ import os
 
 os.environ["DATABASE_URL"] = "postgresql+psycopg://judging:judging@localhost:5432/judging_test"
 os.environ["SEED_ON_START"] = "false"
-os.environ["JWT_SECRET"] = "test-secret"
+os.environ["JWT_SECRET"] = "test-secret-value-ok"
 
 import pytest
 from fastapi.testclient import TestClient

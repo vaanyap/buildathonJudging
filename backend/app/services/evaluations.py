@@ -165,6 +165,21 @@ def _record_change(db: Session, evaluation: Evaluation, actor: User, before: dic
     )
 
 
+def lock_evaluation(db: Session, evaluation: Evaluation) -> Evaluation:
+    """Lock the row and reload it so a concurrent submit cannot be overwritten."""
+    locked = db.scalar(
+        select(Evaluation)
+        .where(Evaluation.id == evaluation.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if locked is None:
+        raise DomainError("Evaluation not found", 404)
+    db.expire(locked, ["scores", "recommended_track"])
+    _ = list(locked.scores)
+    return locked
+
+
 def apply_autosave(
     db: Session,
     evaluation: Evaluation,
@@ -172,6 +187,9 @@ def apply_autosave(
     actor: User,
     project_track_id: int,
 ) -> Evaluation:
+    evaluation = lock_evaluation(db, evaluation)
+    if payload.revision is not None and payload.revision != evaluation.revision:
+        raise DomainError("This scorecard was updated somewhere else. Reload it and try again.", 409)
     if evaluation.status == "submitted":
         raise DomainError(
             "This evaluation is submitted. An organizer must reopen it before editing.",
@@ -222,6 +240,7 @@ def apply_autosave(
 
     evaluation.status = derive_status(evaluation, criteria, project_track_id)
     evaluation.updated_at = now
+    evaluation.revision += 1
     _record_change(db, evaluation, actor, before)
     return evaluation
 
@@ -232,6 +251,7 @@ def submit_evaluation(
     actor: User,
     project_track_id: int,
 ) -> Evaluation:
+    evaluation = lock_evaluation(db, evaluation)
     if evaluation.status == "submitted":
         raise DomainError("This evaluation is already submitted")
     criteria = active_criteria(db)
@@ -248,6 +268,7 @@ def submit_evaluation(
     evaluation.status = "submitted"
     evaluation.submitted_at = now
     evaluation.submission_count += 1
+    evaluation.revision += 1
     evaluation.updated_at = now
     db.add(
         AuditEvent(
@@ -267,6 +288,7 @@ def reopen_evaluation(
     actor: User,
     project_track_id: int,
 ) -> Evaluation:
+    evaluation = lock_evaluation(db, evaluation)
     if evaluation.status != "submitted":
         raise DomainError("Only submitted evaluations can be reopened")
     criteria = active_criteria(db)
@@ -274,6 +296,7 @@ def reopen_evaluation(
     now = utcnow()
     new_status = derive_status(evaluation, criteria, project_track_id)
     evaluation.status = new_status
+    evaluation.revision += 1
     evaluation.updated_at = now
     db.add(
         AuditEvent(

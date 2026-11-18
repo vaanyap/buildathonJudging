@@ -13,6 +13,7 @@ from app.seed import seed_if_empty
 from app.routers import auth as auth_router
 from app.routers import judge as judge_router
 from app.routers import organizer as organizer_router
+from app.auth import require_jwt_secret
 from app.services.domain import DomainError
 
 
@@ -31,8 +32,11 @@ def wait_for_db() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    require_jwt_secret()
     wait_for_db()
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE evaluations ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 1"))
     if settings.seed_on_start:
         db = SessionLocal()
         try:

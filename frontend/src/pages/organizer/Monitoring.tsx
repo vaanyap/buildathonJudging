@@ -31,7 +31,9 @@ export default function Monitoring() {
     };
   }, []);
 
-  if (!data) return <p className="page-loading">Loading progress…</p>;
+  if (!data) {
+    return error ? <p className="banner bad">{error}</p> : <p className="page-loading">Loading progress…</p>;
+  }
   const rows = data.projects.filter((project) => !onlyOpen || project.submitted_count < project.assigned_count);
 
   return (

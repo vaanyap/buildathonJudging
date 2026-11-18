@@ -7,8 +7,11 @@ Quality scores (technical execution, innovation, impact, presentation) are separ
 ## Run with Docker
 
 ```bash
+export JWT_SECRET="$(openssl rand -hex 32)"
 docker compose up --build
 ```
+
+`JWT_SECRET` is required. The API will not start with a missing key or with the old published default. Compose reads the variable from the environment and does not bake a signing key into the file.
 
 Open [http://localhost:8080](http://localhost:8080).
 
@@ -31,6 +34,7 @@ cd backend
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+export JWT_SECRET="$(openssl rand -hex 32)"
 python -m app.seed
 uvicorn app.main:app --reload --port 8000
 ```

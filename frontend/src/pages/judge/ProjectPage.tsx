@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../../api";
+import { ApiError, api } from "../../api";
 import { useAuth } from "../../auth";
 import { StatusPill } from "../../components/StatusPill";
 import { formatClock, formatStamp, formatWhen } from "../../format";
@@ -48,10 +48,11 @@ export default function ProjectPage() {
   const [saveState, setSaveState] = useState<"idle" | "pending" | "saving" | "saved" | "error">("idle");
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState("");
-  const requestId = useRef(0);
   const saveTimer = useRef<number | null>(null);
   const formRef = useRef<EvalForm | null>(null);
-  formRef.current = form;
+  const revisionRef = useRef(1);
+  const saveLock = useRef<Promise<void>>(Promise.resolve());
+  const saving = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,6 +62,8 @@ export default function ProjectPage() {
         if (cancelled) return;
         setDetail(data);
         setForm(formFrom(data.evaluation));
+        formRef.current = formFrom(data.evaluation);
+        revisionRef.current = data.evaluation.revision;
         setStatus(data.evaluation.status);
         setReopened(data.evaluation.reopened);
         setTimer(data.timer);
@@ -98,7 +101,7 @@ export default function ProjectPage() {
 
   useEffect(() => {
     const flush = () => {
-      if (!formRef.current || status === "submitted" || saveTimer.current == null) return;
+      if (!formRef.current || status === "submitted" || saveTimer.current == null || saving.current) return;
       window.clearTimeout(saveTimer.current);
       saveTimer.current = null;
       const token = localStorage.getItem("judging_token");
@@ -109,7 +112,7 @@ export default function ProjectPage() {
           "Content-Type": "application/json",
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify(formRef.current),
+        body: JSON.stringify({ ...formRef.current, revision: revisionRef.current }),
       });
     };
     window.addEventListener("pagehide", flush);
@@ -122,9 +125,12 @@ export default function ProjectPage() {
       void api<Evaluation>(`/api/judge/projects/${projectId}/evaluation`)
         .then((evaluation) => {
           if (evaluation.status === "submitted") return;
+          revisionRef.current = evaluation.revision;
           setStatus(evaluation.status);
           setReopened(evaluation.reopened);
-          setForm(formFrom(evaluation));
+          const next = formFrom(evaluation);
+          formRef.current = next;
+          setForm(next);
           setSaveState("saved");
         })
         .catch(() => undefined);
@@ -132,39 +138,61 @@ export default function ProjectPage() {
     return () => window.clearInterval(poll);
   }, [projectId, status]);
 
-  async function persist(next: EvalForm): Promise<Evaluation | null> {
-    const id = ++requestId.current;
-    setSaveState("saving");
-    try {
-      const saved = await api<Evaluation>(`/api/judge/projects/${projectId}/evaluation`, {
-        method: "PUT",
-        body: JSON.stringify(next),
-      });
-      if (id === requestId.current) {
-        setStatus(saved.status);
-        setReopened(saved.reopened);
-        setSaveState("saved");
-        setError("");
-      }
-      return saved;
-    } catch (err) {
-      if (id === requestId.current) {
+  function persist(): Promise<Evaluation | null> {
+    const run = saveLock.current.then(async () => {
+      const body = formRef.current;
+      if (!body) return null;
+      saving.current = true;
+      setSaveState("saving");
+      try {
+        const saved = await api<Evaluation>(`/api/judge/projects/${projectId}/evaluation`, {
+          method: "PUT",
+          body: JSON.stringify({ ...body, revision: revisionRef.current }),
+        });
+        revisionRef.current = saved.revision;
+        if (formRef.current === body) {
+          setStatus(saved.status);
+          setReopened(saved.reopened);
+          setSaveState("saved");
+          setError("");
+        }
+        return saved;
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 409) {
+          const fresh = await api<Evaluation>(`/api/judge/projects/${projectId}/evaluation`).catch(() => null);
+          if (fresh) {
+            revisionRef.current = fresh.revision;
+            const next = formFrom(fresh);
+            formRef.current = next;
+            setForm(next);
+            setStatus(fresh.status);
+            setReopened(fresh.reopened);
+          }
+        }
         setSaveState("error");
         setError(err instanceof Error ? err.message : "Couldn't save");
+        return null;
+      } finally {
+        saving.current = false;
       }
-      return null;
-    }
+    });
+    saveLock.current = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
   }
 
   function update(next: EvalForm, immediate: boolean) {
+    formRef.current = next;
     setForm(next);
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
     if (immediate) {
-      void persist(next);
+      void persist();
       return;
     }
     setSaveState("pending");
-    saveTimer.current = window.setTimeout(() => void persist(next), 450);
+    saveTimer.current = window.setTimeout(() => void persist(), 450);
   }
 
   async function onTimer(action: "start" | "pause" | "reset") {
@@ -187,7 +215,7 @@ export default function ProjectPage() {
   async function submit() {
     if (!formRef.current) return;
     if (saveTimer.current) window.clearTimeout(saveTimer.current);
-    const saved = await persist(formRef.current);
+    const saved = await persist();
     if (!saved || saved.status !== "ready_to_submit") {
       setError("Finish the required scores and track alignment before submitting.");
       return;

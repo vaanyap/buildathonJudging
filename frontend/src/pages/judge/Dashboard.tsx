@@ -62,7 +62,9 @@ export default function JudgeDashboard() {
           </button>
         </div>
       </header>
-      <p className="lede">Open any project. Order is a suggestion, not a sequence. Drafts stay private until you submit.</p>
+      <p className="lede">
+        Open any project. Order is a suggestion, not a sequence. Only private notes stay hidden from organizers. A draft is not a submission.
+      </p>
       {error && <p className="banner bad">{error}</p>}
       {next && (
         <Link className="next-card" to={`/judge/projects/${next.id}`}>
