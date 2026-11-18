@@ -1,0 +1,3 @@
+name,description,track,team_members,github_url,demo_url,submission_url
+FloorMap,Indoor map of Bobst with accessible routes between the stacks.,Education,Mina Cho; Paul Adeyemi,https://github.com/tech-nyu-buildathon/floormap,https://floormap.demo.buildathon.tech.nyu.edu,https://buildathon.tech.nyu.edu/submissions/floormap
+PantryPing,Texts a dorm pantry channel when shelves are low and logs what was restocked.,Sustainability,Chris Abel; Noor Haddad,https://github.com/tech-nyu-buildathon/pantryping,https://pantryping.demo.buildathon.tech.nyu.edu,https://buildathon.tech.nyu.edu/submissions/pantryping
