@@ -1,0 +1,200 @@
+import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
+import { api } from "../../api";
+import { StatusPill } from "../../components/StatusPill";
+import { DELAY_LABEL, formatWhen, percent } from "../../format";
+import type { Criterion, Overview } from "../../types";
+
+export default function Overview() {
+  const [data, setData] = useState<Overview | null>(null);
+  const [criteria, setCriteria] = useState<Criterion[]>([]);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+
+  async function load() {
+    const overview = await api<Overview>("/api/organizer/overview");
+    setData(overview);
+    setCriteria(overview.criteria);
+  }
+
+  useEffect(() => {
+    let stop = false;
+    const pull = () => {
+      load().catch((err: unknown) => {
+        if (!stop) setError(err instanceof Error ? err.message : "Couldn't load overview");
+      });
+    };
+    pull();
+    const id = window.setInterval(pull, 8000);
+    return () => {
+      stop = true;
+      window.clearInterval(id);
+    };
+  }, []);
+
+  async function saveCriterion(criterion: Criterion) {
+    setError("");
+    setNotice("");
+    try {
+      await api(`/api/organizer/criteria/${criterion.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          name: criterion.name,
+          description: criterion.description,
+          min_score: criterion.min_score,
+          max_score: criterion.max_score,
+        }),
+      });
+      setNotice(`Saved “${criterion.name}”.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Couldn't save the rubric");
+    }
+  }
+
+  if (!data) return <p className="page-loading">Loading overview…</p>;
+  const counts = data.counts;
+
+  return (
+    <div className="stack">
+      <header className="page-head">
+        <div>
+          <h1>Overview</h1>
+          <p className="lede">Drafts are visible here and are not counted as complete.</p>
+        </div>
+      </header>
+      {error && <p className="banner bad">{error}</p>}
+      {notice && <p className="banner ok">{notice}</p>}
+      <section className="stats">
+        <article className="stat">
+          <span>Submitted</span>
+          <strong>
+            {counts.submitted}/{counts.assignments}
+          </strong>
+          <em>{percent(counts.completion_rate)} complete</em>
+        </article>
+        <article className="stat">
+          <span>Ready</span>
+          <strong>{counts.ready_to_submit}</strong>
+          <em>Not submitted yet</em>
+        </article>
+        <article className="stat">
+          <span>Drafts</span>
+          <strong>{counts.draft_saved}</strong>
+          <em>Not complete</em>
+        </article>
+        <article className="stat">
+          <span>Not started</span>
+          <strong>{counts.not_started + counts.viewed}</strong>
+          <em>
+            {counts.viewed} viewed · {counts.projects} projects · {counts.judges} judges
+          </em>
+        </article>
+      </section>
+
+      <section className="split">
+        <div className="panel">
+          <div className="panel-head">
+            <h2>Delays</h2>
+            <Link to="/organizer/schedule">Schedule</Link>
+          </div>
+          {data.delays.length === 0 && <p className="muted">No delayed presentations right now.</p>}
+          <ul className="plain">
+            {data.delays.map((delay) => (
+              <li key={delay.project_id}>
+                <strong>{delay.project_name}</strong>
+                <span className={`pill delay-${delay.kind}`}>{DELAY_LABEL[delay.kind]}</span>
+                <p className="muted">
+                  {formatWhen(delay.starts_at)} · {delay.location} · {delay.detail}
+                </p>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="panel">
+          <div className="panel-head">
+            <h2>Missing submissions</h2>
+            <Link to="/organizer/progress">Live progress</Link>
+          </div>
+          {data.missing.length === 0 && <p className="muted">Every assignment is submitted.</p>}
+          <ul className="plain">
+            {data.missing.slice(0, 8).map((project) => (
+              <li key={project.project_id}>
+                <strong>{project.project_name}</strong>
+                <span className="muted"> {project.track_name}</span>
+                <div className="wrap">
+                  {project.outstanding.map((judge) => (
+                    <span key={judge.judge_id} className="inline-status">
+                      {judge.judge_name} <StatusPill status={judge.status} />
+                    </span>
+                  ))}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section className="panel">
+        <h2>Rubric</h2>
+        <p className="hint">Quality scores use this 1–5 scale. Track alignment is collected separately and is not one of these criteria.</p>
+        <div className="stack">
+          {criteria.map((criterion, index) => (
+            <div key={criterion.id} className="rubric-row">
+              <label>
+                Name
+                <input
+                  value={criterion.name}
+                  onChange={(event) =>
+                    setCriteria((current) => current.map((item, itemIndex) => (itemIndex === index ? { ...item, name: event.target.value } : item)))
+                  }
+                />
+              </label>
+              <label>
+                Description
+                <input
+                  value={criterion.description}
+                  onChange={(event) =>
+                    setCriteria((current) =>
+                      current.map((item, itemIndex) => (itemIndex === index ? { ...item, description: event.target.value } : item)),
+                    )
+                  }
+                />
+              </label>
+              <label>
+                Min
+                <input
+                  type="number"
+                  min={1}
+                  max={5}
+                  value={criterion.min_score}
+                  onChange={(event) =>
+                    setCriteria((current) =>
+                      current.map((item, itemIndex) => (itemIndex === index ? { ...item, min_score: Number(event.target.value) } : item)),
+                    )
+                  }
+                />
+              </label>
+              <label>
+                Max
+                <input
+                  type="number"
+                  min={1}
+                  max={5}
+                  value={criterion.max_score}
+                  onChange={(event) =>
+                    setCriteria((current) =>
+                      current.map((item, itemIndex) => (itemIndex === index ? { ...item, max_score: Number(event.target.value) } : item)),
+                    )
+                  }
+                />
+              </label>
+              <button className="btn small" type="button" onClick={() => void saveCriterion(criterion)}>
+                Save
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
