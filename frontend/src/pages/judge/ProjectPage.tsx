@@ -54,6 +54,7 @@ export default function ProjectPage() {
   const revisionRef = useRef(1);
   const saveLock = useRef<Promise<void>>(Promise.resolve());
   const saving = useRef(false);
+  const serverPhase = useRef<TimerPhaseKey | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -143,7 +144,7 @@ export default function ProjectPage() {
         .catch(() => undefined);
     }, 8000);
     return () => window.clearInterval(poll);
-  }, [projectId, status]);
+  }, [projectId, trackId, status]);
 
   function persist(): Promise<Evaluation | null> {
     const run = saveLock.current.then(async () => {
@@ -152,7 +153,7 @@ export default function ProjectPage() {
       saving.current = true;
       setSaveState("saving");
       try {
-        const saved = await api<Evaluation>(`/api/judge/projects/${projectId}/evaluation`, {
+        const saved = await api<Evaluation>(`/api/judge/projects/${projectId}/tracks/${trackId}/evaluation`, {
           method: "PUT",
           body: JSON.stringify({ ...body, revision: revisionRef.current }),
         });
@@ -166,7 +167,7 @@ export default function ProjectPage() {
         return saved;
       } catch (err) {
         if (err instanceof ApiError && err.status === 409) {
-          const fresh = await api<Evaluation>(`/api/judge/projects/${projectId}/evaluation`).catch(() => null);
+          const fresh = await api<Evaluation>(`/api/judge/projects/${projectId}/tracks/${trackId}/evaluation`).catch(() => null);
           if (fresh) {
             revisionRef.current = fresh.revision;
             const next = formFrom(fresh);
