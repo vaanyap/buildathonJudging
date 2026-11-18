@@ -1,6 +1,7 @@
 import csv
 import io
 from datetime import datetime
+from typing import Literal
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -20,6 +21,15 @@ from app.services.aggregation import (
     get_project,
     load_projects,
     progress_snapshot,
+)
+from app.services.attendance import (
+    REVIEW_LABELS,
+    attendance_report,
+    describe_project,
+    import_attendees,
+    load_attendance_index,
+    save_member_override,
+    save_project_review,
 )
 from app.services.assignments import (
     assign_judge_to_track,
@@ -132,6 +142,17 @@ class TimerDefaultsIn(BaseModel):
     qa_minutes: int = Field(ge=1, le=180)
 
 
+class AttendanceMemberIn(BaseModel):
+    name: str = Field(min_length=1, max_length=300)
+    decision: Literal["attended", "absent", "clear"]
+    attendee_id: int | None = None
+
+
+class AttendanceReviewIn(BaseModel):
+    status: Literal["open", "reviewed_ok", "disqualified"]
+    note: str = ""
+
+
 def _http(exc: DomainError) -> None:
     raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
@@ -194,7 +215,7 @@ def _assignment_for_edit(db: Session, assignment_id: int) -> Assignment:
     return assignment
 
 
-def _project_admin(project: Project) -> dict:
+def _project_admin(project: Project, attendance: dict) -> dict:
     data = project_dict(project)
     data["assignments"] = [
         {
@@ -207,7 +228,13 @@ def _project_admin(project: Project) -> dict:
         }
         for assignment in sorted(project.assignments, key=lambda item: (item.track.name.lower(), item.judge.name.lower()))
     ]
+    data["attendance_flagged"] = attendance["flagged"]
+    data["attendance_review"] = attendance["review"]["status"]
     return data
+
+
+def _described(db: Session, project: Project, index: dict | None = None) -> dict:
+    return describe_project(project, index or load_attendance_index(db))
 
 
 def _apply_project(project: Project, body: ProjectIn) -> None:
@@ -317,7 +344,9 @@ def update_criterion(
 
 @router.get("/projects")
 def projects(db: Session = Depends(get_db), _: User = Depends(require_organizer)) -> list[dict]:
-    return [_project_admin(project) for project in load_projects(db)]
+    rows = load_projects(db)
+    index = load_attendance_index(db)
+    return [_project_admin(project, _described(db, project, index)) for project in rows]
 
 
 @router.post("/projects", status_code=201)
@@ -332,7 +361,8 @@ def create_project(body: ProjectIn, db: Session = Depends(get_db), _: User = Dep
         db.rollback()
         _http(exc)
     _commit(db)
-    return _project_admin(_require_project(db, project.id))
+    saved = _require_project(db, project.id)
+    return _project_admin(saved, _described(db, saved))
 
 
 @router.patch("/projects/{project_id}")
@@ -351,7 +381,8 @@ def update_project(
         db.rollback()
         _http(exc)
     _commit(db)
-    return _project_admin(_require_project(db, project.id))
+    saved = _require_project(db, project.id)
+    return _project_admin(saved, _described(db, saved))
 
 
 @router.delete("/projects/{project_id}")
@@ -400,6 +431,67 @@ async def import_projects(
     if not dry_run:
         _commit(db)
     return summary
+
+
+@router.post("/attendees/import")
+async def import_attendee_list(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    _: User = Depends(require_organizer),
+) -> dict:
+    raw = await file.read()
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="CSV must be UTF-8") from None
+    try:
+        summary = import_attendees(db, text)
+    except DomainError as exc:
+        db.rollback()
+        _http(exc)
+    _commit(db)
+    return summary
+
+
+@router.get("/attendance")
+def attendance(db: Session = Depends(get_db), _: User = Depends(require_organizer)) -> dict:
+    return attendance_report(db)
+
+
+@router.put("/attendance/members")
+def update_attendance_member(
+    body: AttendanceMemberIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_organizer),
+) -> dict:
+    try:
+        save_member_override(db, user, body.name, body.decision, body.attendee_id)
+    except DomainError as exc:
+        db.rollback()
+        _http(exc)
+    _commit(db)
+    return attendance_report(db)
+
+
+@router.patch("/projects/{project_id}/attendance")
+def update_attendance_review(
+    project_id: int,
+    body: AttendanceReviewIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_organizer),
+) -> dict:
+    project = _require_project(db, project_id)
+    try:
+        save_project_review(db, user, project, body.status, body.note)
+    except DomainError as exc:
+        db.rollback()
+        _http(exc)
+    _commit(db)
+    report = attendance_report(db)
+    match = next((item for item in report["projects"] if item["project_id"] == project_id), None)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return match
 
 
 def _judge_payload(db: Session, judge: User) -> dict:
@@ -905,6 +997,10 @@ def export_results(db: Session = Depends(get_db), _: User = Depends(require_orga
         "submitted_evaluations",
         "discrepancy",
         "discrepancy_reasons",
+        "sign_in_flagged",
+        "sign_in_review",
+        "sign_in_note",
+        "sign_in_members",
     ]
     header += [f"avg_{criterion['key']}" for criterion in criteria]
     header += ["judge", "judge_status", "judge_overall"]
@@ -922,6 +1018,10 @@ def export_results(db: Session = Depends(get_db), _: User = Depends(require_orga
             project["submitted_count"],
             "yes" if project["discrepancy"] else "no",
             "; ".join(project["discrepancy_reasons"]),
+            "yes" if project["attendance_flagged"] else "no",
+            REVIEW_LABELS.get(project["attendance_review"], project["attendance_review"]),
+            project["attendance_note"],
+            "; ".join(f"{member['name']}: {member['label']}" for member in project["attendance_members"]),
         ]
         base += [
             "" if project["criterion_averages"].get(criterion["key"]) is None else f"{project['criterion_averages'][criterion['key']]:.2f}"

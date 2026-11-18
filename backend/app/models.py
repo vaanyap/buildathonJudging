@@ -255,6 +255,70 @@ class Score(Base):
     criterion: Mapped[Criterion] = relationship()
 
 
+class Attendee(Base):
+    """Someone who signed in on event day. Re-import upserts by email."""
+
+    __tablename__ = "attendees"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    first_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    last_name: Mapped[str] = mapped_column(String(120), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), unique=True, index=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+
+class AttendanceOverride(Base):
+    """Organizer decision for one submitted name. Survives sign-in and submission re-imports."""
+
+    __tablename__ = "attendance_overrides"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    member_key: Mapped[str] = mapped_column(String(400), unique=True, index=True, nullable=False)
+    display_name: Mapped[str] = mapped_column(String(300), nullable=False)
+    decision: Mapped[str] = mapped_column(String(16), nullable=False)
+    attendee_id: Mapped[int | None] = mapped_column(ForeignKey("attendees.id", ondelete="SET NULL"), nullable=True)
+    updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    attendee: Mapped[Attendee | None] = relationship()
+    updated_by: Mapped[User | None] = relationship()
+
+
+class AttendanceReview(Base):
+    """Organizer note on a flagged project. Missing row means Open. It does not change eligibility."""
+
+    __tablename__ = "attendance_reviews"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), unique=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    note: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    updated_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    project: Mapped[Project] = relationship()
+    updated_by: Mapped[User | None] = relationship()
+
+
+class AttendanceEvent(Base):
+    """Who confirmed a team member or changed a project's sign-in review."""
+
+    __tablename__ = "attendance_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    actor_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    action: Mapped[str] = mapped_column(String(32), nullable=False)
+    project_id: Mapped[int | None] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    member_key: Mapped[str] = mapped_column(String(400), nullable=False, default="")
+    changes: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+
+    actor: Mapped[User | None] = relationship()
+
+
 class AuditEvent(Base):
     """Trail for submission, reopen, and any score change after a submission existed."""
 

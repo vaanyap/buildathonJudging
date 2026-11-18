@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, downloadCsv } from "../../api";
+import { SignInBadge } from "../../components/SignInBadge";
 import type { Criterion } from "../../types";
 
 type Comment = {
@@ -17,6 +18,7 @@ type Winner = {
   criterion_averages: Record<string, number | null>;
   discrepancy: boolean;
   discrepancy_status: string | null;
+  attendance_flagged: boolean;
   summary: { text: string; strengths: string[]; concerns: string[]; themes: string[] };
   formal_comments: Comment[];
 };
@@ -94,6 +96,7 @@ export default function Winners() {
                   {winner.rank}. {winner.project_name}
                 </h3>
                 {winner.discrepancy && <span className="pill delay-overrun">Discrepancy · {winner.discrepancy_status}</span>}
+                {winner.attendance_flagged && <SignInBadge />}
               </div>
               <p>Overall {winner.overall == null ? "—" : winner.overall.toFixed(2)}</p>
               <div className="wrap">
