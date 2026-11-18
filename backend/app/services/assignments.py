@@ -59,8 +59,8 @@ def create_assignment(db: Session, judge: User, project: Project) -> Assignment:
 def delete_assignment(db: Session, assignment: Assignment, force: bool) -> None:
     evaluation = assignment.evaluation
     status = evaluation.status if evaluation is not None else "not_started"
-    if status == "submitted":
-        raise DomainError("Submitted evaluations can't be removed.", 409)
+    if status == "submitted" or (evaluation is not None and evaluation.submission_count > 0):
+        raise DomainError("Evaluations that have been submitted can't be removed.", 409)
     if status in {"draft_saved", "ready_to_submit"} and not force:
         raise DomainError("This judge has saved work. Confirm to discard the draft.", 409)
     if evaluation is not None:
